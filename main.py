@@ -30,6 +30,9 @@ from dotenv import load_dotenv
 from src.auth import GraphAuthClient
 from src.crawler import SharePointCrawler
 from src.exporter import CrawlExporter
+from src.extractor import DocumentExtractor
+from src.classifier import DocumentClassifier
+from src.flow_discovery import FlowDiscovery
 
 
 def setup_logging(verbose: bool = False):
@@ -168,6 +171,131 @@ def run_crawl(config: dict, output_dir: str):
     logger.info(f"  Structure map:       {structure_path}")
 
 
+def run_analysis(config: dict, output_dir: str):
+    """Phase 2: Crawl, extract content, classify with AI, discover flows."""
+    logger = logging.getLogger(__name__)
+
+    # Check for Azure OpenAI config
+    aoai_key = os.getenv("AZURE_OPENAI_KEY")
+    aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+
+    if not aoai_key or not aoai_endpoint:
+        print("ERROR: Phase 2 requires Azure OpenAI configuration.")
+        print("Add these to your .env file:")
+        print("  AZURE_OPENAI_KEY=your-key")
+        print("  AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/")
+        print("  AZURE_OPENAI_DEPLOYMENT=gpt-4o  (optional, defaults to gpt-4o)")
+        sys.exit(1)
+
+    # Authenticate
+    auth = GraphAuthClient(
+        tenant_id=config["AZURE_TENANT_ID"],
+        client_id=config["AZURE_CLIENT_ID"],
+        client_secret=config["AZURE_CLIENT_SECRET"],
+    )
+
+    # Step 1: Crawl (same as Phase 1)
+    logger.info("=" * 60)
+    logger.info("PHASE 2: CONTENT ANALYSIS")
+    logger.info("=" * 60)
+    logger.info("")
+    logger.info("Step 1/4: Crawling SharePoint site...")
+    crawler = SharePointCrawler(auth, config["SP_SITE_URL"])
+    documents = crawler.crawl()
+
+    if not documents:
+        logger.warning("No documents found. The site may be empty.")
+        return
+
+    # Step 2: Extract text content from documents
+    logger.info("")
+    logger.info("Step 2/4: Extracting document content...")
+    extractor = DocumentExtractor(auth)
+
+    # Get the drive ID once (for the primary document library)
+    libraries = crawler._get_document_libraries()
+    primary_drive_id = libraries[0]["id"] if libraries else ""
+
+    for i, doc in enumerate(documents):
+        if i % 20 == 0:
+            logger.info(f"  Extracting: {i}/{len(documents)} documents")
+
+        # Try to get drive ID from the item's parent reference path
+        drive_item_path = doc.get("drive_item_path", "")
+        drive_id = primary_drive_id
+
+        if "/drives/" in drive_item_path:
+            try:
+                # Path format: /drives/{driveId}/root:/path
+                parts = drive_item_path.split("/drives/")[1].split("/")
+                drive_id = parts[0]
+            except (IndexError, KeyError):
+                pass
+
+        text = extractor.extract_text(
+            drive_item_id=doc["item_id"],
+            drive_id=drive_id,
+            file_name=doc["file_name"],
+            extension=doc["extension"],
+        )
+        doc["extracted_text"] = text
+
+    extracted_count = sum(1 for d in documents if d.get("extracted_text"))
+    logger.info(f"  Text extracted from {extracted_count}/{len(documents)} documents")
+
+    # Step 3: Classify documents with Azure OpenAI
+    logger.info("")
+    logger.info("Step 3/4: Classifying documents with AI...")
+    classifier = DocumentClassifier(
+        api_key=aoai_key,
+        endpoint=aoai_endpoint,
+        deployment=aoai_deployment,
+    )
+    documents = classifier.classify_batch(documents)
+
+    # Step 4: Discover Power Automate flows
+    logger.info("")
+    logger.info("Step 4/4: Discovering Power Automate flows...")
+    flow_discovery = FlowDiscovery(auth, crawler.site_id)
+    flow_discovery.discover_site_workflows()
+    flow_report = flow_discovery.generate_flow_report()
+
+    # Export all results
+    logger.info("")
+    logger.info("Exporting results...")
+
+    # Remove extracted_text from export (too large for CSV)
+    for doc in documents:
+        doc.pop("extracted_text", None)
+
+    exporter = CrawlExporter(
+        documents=documents,
+        stats=crawler.stats,
+        output_dir=output_dir,
+    )
+
+    enriched_csv = exporter.export_enriched_csv()
+    json_path = exporter.export_json()
+    structure_path = exporter.export_structure_map()
+    flow_path = exporter.export_flow_report(flow_report)
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("PHASE 2 COMPLETE")
+    logger.info("=" * 60)
+    logger.info("OUTPUT FILES:")
+    logger.info(f"  Enriched CSV:        {enriched_csv}")
+    logger.info(f"  JSON (full data):    {json_path}")
+    logger.info(f"  Structure map:       {structure_path}")
+    logger.info(f"  Flow report:         {flow_path}")
+    logger.info("")
+    logger.info("NEXT STEPS:")
+    logger.info("  1. Review the enriched CSV for AI classifications")
+    logger.info("  2. Share the flow report with site admin / flow owners")
+    logger.info("  3. Wait for flow dependency feedback before Phase 3")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Crawl a SharePoint Online site and inventory all documents.",
@@ -176,8 +304,9 @@ def main():
 Examples:
   python main.py --test              Test connection and permissions
   python main.py                     Run full crawl, output to ./output/
-  python main.py --output ./results  Run crawl, save to custom directory
-  python main.py --verbose           Run with detailed debug logging
+  python main.py --analyze           Phase 2: crawl + extract + classify + flows
+  python main.py --output ./results  Custom output directory
+  python main.py --verbose           Enable detailed debug logging
         """,
     )
 
@@ -187,9 +316,14 @@ Examples:
         help="Test connection and permissions without crawling",
     )
     parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Phase 2: crawl, extract content, classify with AI, discover flows",
+    )
+    parser.add_argument(
         "--output",
         default="./output",
-        help="Output directory for crawl results (default: ./output)",
+        help="Output directory for results (default: ./output)",
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -203,6 +337,8 @@ Examples:
 
     if args.test:
         test_connection(config)
+    elif args.analyze:
+        run_analysis(config, args.output)
     else:
         run_crawl(config, args.output)
 
