@@ -79,23 +79,33 @@ class SharePointCrawler:
         return doc_libraries
 
     def _crawl_folder(
-        self, drive_id: str, folder_path: str, library_name: str, depth: int = 0
+        self,
+        drive_id: str,
+        folder_path: str,
+        library_name: str,
+        depth: int = 0,
+        folder_id: str = None,
     ):
         """Recursively crawl a folder and its subfolders.
 
+        Uses item ID-based traversal instead of path-based URLs to avoid
+        issues with special characters (#, %, etc.) in folder names.
+
         Args:
             drive_id: The Graph drive ID for this document library.
-            folder_path: Current folder path within the drive (Graph item path).
+            folder_path: Current folder path (for display/metadata only).
             library_name: Human-readable name of the document library.
             depth: Current folder nesting depth (0 = library root).
+            folder_id: Graph item ID of the folder (None = drive root).
         """
         self.stats["folders_traversed"] += 1
 
-        # Build the endpoint — root or subfolder
-        if folder_path == "/":
+        # Use item ID-based endpoint to avoid URL encoding issues with
+        # special characters like # in folder names
+        if folder_id is None:
             endpoint = f"/drives/{drive_id}/root/children"
         else:
-            endpoint = f"/drives/{drive_id}/root:{folder_path}:/children"
+            endpoint = f"/drives/{drive_id}/items/{folder_id}/children"
 
         # Request specific fields to reduce payload
         params = {
@@ -115,9 +125,10 @@ class SharePointCrawler:
 
         for item in items:
             if "folder" in item:
-                # It's a folder — recurse into it
+                # It's a folder — recurse using the item's ID
                 child_count = item["folder"].get("childCount", 0)
                 subfolder_name = item["name"]
+                subfolder_id = item["id"]
 
                 if folder_path == "/":
                     subfolder_path = f"/{subfolder_name}"
@@ -134,6 +145,7 @@ class SharePointCrawler:
                     folder_path=subfolder_path,
                     library_name=library_name,
                     depth=depth + 1,
+                    folder_id=subfolder_id,
                 )
 
             elif "file" in item:
