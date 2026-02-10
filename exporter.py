@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class CrawlExporter:
     """Exports crawl results to CSV and JSON files with summary stats."""
 
-    # Column order for CSV output
+    # Column order for CSV output (Phase 1 — crawl only)
     CSV_COLUMNS = [
         "file_name",
         "extension",
@@ -35,6 +35,17 @@ class CrawlExporter:
         "modified_by",
         "web_url",
         "item_id",
+    ]
+
+    # Additional columns for Phase 2 — content analysis
+    ENRICHED_COLUMNS = CSV_COLUMNS + [
+        "ai_category",
+        "ai_subcategory",
+        "ai_summary",
+        "ai_keywords",
+        "ai_confidence",
+        "ai_suggested_folder",
+        "ai_sensitivity_flag",
     ]
 
     def __init__(self, documents: list, stats: dict, output_dir: str = "."):
@@ -63,6 +74,45 @@ class CrawlExporter:
             writer.writerows(self.documents)
 
         logger.info(f"CSV exported: {filepath} ({len(self.documents)} rows)")
+        return str(filepath)
+
+    def export_enriched_csv(self) -> str:
+        """Export enriched document metadata (with AI analysis) to CSV.
+
+        Returns:
+            Path to the created CSV file.
+        """
+        filename = f"sp_analysis_{self.timestamp}.csv"
+        filepath = self.output_dir / filename
+
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=self.ENRICHED_COLUMNS, extrasaction="ignore"
+            )
+            writer.writeheader()
+            writer.writerows(self.documents)
+
+        logger.info(
+            f"Enriched CSV exported: {filepath} ({len(self.documents)} rows)"
+        )
+        return str(filepath)
+
+    def export_flow_report(self, flow_report: dict) -> str:
+        """Export the Power Automate dependency report to JSON.
+
+        Args:
+            flow_report: Report dict from FlowDiscovery.generate_flow_report()
+
+        Returns:
+            Path to the created JSON file.
+        """
+        filename = f"sp_flow_report_{self.timestamp}.json"
+        filepath = self.output_dir / filename
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(flow_report, f, indent=2, default=str)
+
+        logger.info(f"Flow report exported: {filepath}")
         return str(filepath)
 
     def export_json(self) -> str:
