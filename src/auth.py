@@ -6,6 +6,7 @@ Uses MSAL (Microsoft Authentication Library) with client credentials flow
 """
 
 import sys
+import time
 import msal
 import requests
 
@@ -79,6 +80,76 @@ class GraphAuthClient:
 
         response.raise_for_status()
         return response.json()
+
+    def post(self, endpoint: str, body: dict = None) -> dict:
+        """Make an authenticated POST request to Microsoft Graph.
+
+        Used for creating folders and other write operations.
+
+        Args:
+            endpoint: Graph API endpoint path.
+            body: JSON body to send.
+
+        Returns:
+            Parsed JSON response as a dictionary.
+        """
+        if endpoint.startswith("https://"):
+            url = endpoint
+        else:
+            url = f"{self.GRAPH_BASE_URL}{endpoint}"
+
+        response = requests.post(
+            url, headers=self.headers, json=body, timeout=30
+        )
+
+        if response.status_code == 401:
+            self.get_token()
+            response = requests.post(
+                url, headers=self.headers, json=body, timeout=30
+            )
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 2))
+            time.sleep(retry_after)
+            return self.post(endpoint, body)
+
+        response.raise_for_status()
+        return response.json() if response.text else {}
+
+    def patch(self, endpoint: str, body: dict = None) -> dict:
+        """Make an authenticated PATCH request to Microsoft Graph.
+
+        Used for moving files and updating metadata.
+
+        Args:
+            endpoint: Graph API endpoint path.
+            body: JSON body to send.
+
+        Returns:
+            Parsed JSON response as a dictionary.
+        """
+        if endpoint.startswith("https://"):
+            url = endpoint
+        else:
+            url = f"{self.GRAPH_BASE_URL}{endpoint}"
+
+        response = requests.patch(
+            url, headers=self.headers, json=body, timeout=30
+        )
+
+        if response.status_code == 401:
+            self.get_token()
+            response = requests.patch(
+                url, headers=self.headers, json=body, timeout=30
+            )
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 2))
+            time.sleep(retry_after)
+            return self.patch(endpoint, body)
+
+        response.raise_for_status()
+        return response.json() if response.text else {}
 
     def get_all_pages(self, endpoint: str, params: dict = None) -> list:
         """Follow pagination to retrieve all results from a Graph API endpoint.
