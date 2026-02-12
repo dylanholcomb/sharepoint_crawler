@@ -33,10 +33,10 @@ from src.exporter import CrawlExporter
 from src.extractor import DocumentExtractor
 from src.classifier import DocumentClassifier
 from src.flow_discovery import FlowDiscovery
+from src.organizer import DocumentOrganizer
 
 
 def setup_logging(verbose: bool = False):
-    """Configure logging with appropriate level and format."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -46,15 +46,6 @@ def setup_logging(verbose: bool = False):
 
 
 def load_config() -> dict:
-    """Load configuration from .env file.
-
-    Returns:
-        Dictionary with required configuration values.
-
-    Raises:
-        SystemExit: If required environment variables are missing.
-    """
-    # Look for .env in the project directory, not the working directory
     dotenv_path = PROJECT_DIR / ".env"
     load_dotenv(dotenv_path)
 
@@ -79,7 +70,6 @@ def load_config() -> dict:
 
 
 def test_connection(config: dict):
-    """Test authentication and SharePoint site access."""
     logger = logging.getLogger(__name__)
     logger.info("Testing connection...")
 
@@ -90,19 +80,16 @@ def test_connection(config: dict):
     )
 
     try:
-        # Test 1: Can we get a token?
         logger.info("Step 1: Acquiring access token...")
         auth.get_token()
         logger.info("  Token acquired successfully")
 
-        # Test 2: Can we resolve the site?
         logger.info("Step 2: Resolving SharePoint site...")
         site_info = auth.test_connection(config["SP_SITE_URL"])
         logger.info(f"  Site name: {site_info.get('displayName', 'N/A')}")
         logger.info(f"  Site ID:   {site_info.get('id', 'N/A')}")
         logger.info(f"  Web URL:   {site_info.get('webUrl', 'N/A')}")
 
-        # Test 3: Can we list document libraries?
         logger.info("Step 3: Listing document libraries...")
         site_id = site_info["id"]
         drives = auth.get_all_pages(f"/sites/{site_id}/drives")
@@ -135,17 +122,14 @@ def test_connection(config: dict):
 
 
 def run_crawl(config: dict, output_dir: str):
-    """Execute the full SharePoint crawl and export results."""
     logger = logging.getLogger(__name__)
 
-    # Authenticate
     auth = GraphAuthClient(
         tenant_id=config["AZURE_TENANT_ID"],
         client_id=config["AZURE_CLIENT_ID"],
         client_secret=config["AZURE_CLIENT_SECRET"],
     )
 
-    # Create crawler and run
     crawler = SharePointCrawler(auth, config["SP_SITE_URL"])
     documents = crawler.crawl()
 
@@ -153,7 +137,6 @@ def run_crawl(config: dict, output_dir: str):
         logger.warning("No documents found. The site may be empty.")
         return
 
-    # Export results
     exporter = CrawlExporter(
         documents=documents,
         stats=crawler.stats,
@@ -172,10 +155,8 @@ def run_crawl(config: dict, output_dir: str):
 
 
 def run_analysis(config: dict, output_dir: str):
-    """Phase 2: Crawl, extract content, classify with AI, discover flows."""
     logger = logging.getLogger(__name__)
 
-    # Check for Azure OpenAI config
     aoai_key = os.getenv("AZURE_OPENAI_KEY")
     aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
@@ -188,14 +169,12 @@ def run_analysis(config: dict, output_dir: str):
         print("  AZURE_OPENAI_DEPLOYMENT=gpt-4o  (optional, defaults to gpt-4o)")
         sys.exit(1)
 
-    # Authenticate
     auth = GraphAuthClient(
         tenant_id=config["AZURE_TENANT_ID"],
         client_id=config["AZURE_CLIENT_ID"],
         client_secret=config["AZURE_CLIENT_SECRET"],
     )
 
-    # Step 1: Crawl (same as Phase 1)
     logger.info("=" * 60)
     logger.info("PHASE 2: CONTENT ANALYSIS")
     logger.info("=" * 60)
@@ -208,12 +187,10 @@ def run_analysis(config: dict, output_dir: str):
         logger.warning("No documents found. The site may be empty.")
         return
 
-    # Step 2: Extract text content from documents
     logger.info("")
     logger.info("Step 2/4: Extracting document content...")
     extractor = DocumentExtractor(auth)
 
-    # Get the drive ID once (for the primary document library)
     libraries = crawler._get_document_libraries()
     primary_drive_id = libraries[0]["id"] if libraries else ""
 
@@ -221,13 +198,11 @@ def run_analysis(config: dict, output_dir: str):
         if i % 20 == 0:
             logger.info(f"  Extracting: {i}/{len(documents)} documents")
 
-        # Try to get drive ID from the item's parent reference path
         drive_item_path = doc.get("drive_item_path", "")
         drive_id = primary_drive_id
 
         if "/drives/" in drive_item_path:
             try:
-                # Path format: /drives/{driveId}/root:/path
                 parts = drive_item_path.split("/drives/")[1].split("/")
                 drive_id = parts[0]
             except (IndexError, KeyError):
@@ -244,7 +219,6 @@ def run_analysis(config: dict, output_dir: str):
     extracted_count = sum(1 for d in documents if d.get("extracted_text"))
     logger.info(f"  Text extracted from {extracted_count}/{len(documents)} documents")
 
-    # Step 3: Classify documents with Azure OpenAI
     logger.info("")
     logger.info("Step 3/4: Classifying documents with AI...")
     classifier = DocumentClassifier(
@@ -254,18 +228,15 @@ def run_analysis(config: dict, output_dir: str):
     )
     documents = classifier.classify_batch(documents)
 
-    # Step 4: Discover Power Automate flows
     logger.info("")
     logger.info("Step 4/4: Discovering Power Automate flows...")
     flow_discovery = FlowDiscovery(auth, crawler.site_id)
     flow_discovery.discover_site_workflows()
     flow_report = flow_discovery.generate_flow_report()
 
-    # Export all results
     logger.info("")
     logger.info("Exporting results...")
 
-    # Remove extracted_text from export (too large for CSV)
     for doc in documents:
         doc.pop("extracted_text", None)
 
@@ -293,7 +264,54 @@ def run_analysis(config: dict, output_dir: str):
     logger.info("NEXT STEPS:")
     logger.info("  1. Review the enriched CSV for AI classifications")
     logger.info("  2. Share the flow report with site admin / flow owners")
-    logger.info("  3. Wait for flow dependency feedback before Phase 3")
+    logger.info("  3. Run --organize with the enriched CSV to get folder proposals")
+
+
+def run_organize(config: dict, output_dir: str, csv_path: str):
+    logger = logging.getLogger(__name__)
+
+    aoai_key = os.getenv("AZURE_OPENAI_KEY")
+    aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    aoai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+
+    if not aoai_key or not aoai_endpoint:
+        print("ERROR: --organize requires Azure OpenAI configuration in .env")
+        sys.exit(1)
+
+    if not csv_path:
+        output_path = Path(output_dir)
+        csvs = sorted(output_path.glob("sp_analysis_*.csv"), reverse=True)
+        if not csvs:
+            print(f"ERROR: No enriched CSV found in {output_dir}")
+            print("Run --analyze first to generate the classified document inventory.")
+            sys.exit(1)
+        csv_path = str(csvs[0])
+        logger.info(f"Using most recent enriched CSV: {csv_path}")
+
+    logger.info("=" * 60)
+    logger.info("PHASE 3: FOLDER STRUCTURE PROPOSALS")
+    logger.info("=" * 60)
+
+    organizer = DocumentOrganizer(
+        api_key=aoai_key,
+        endpoint=aoai_endpoint,
+        deployment=aoai_deployment,
+    )
+
+    proposal = organizer.organize(csv_path)
+    files = organizer.export_proposal(proposal, output_dir)
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("PHASE 3 COMPLETE")
+    logger.info("=" * 60)
+    logger.info("OUTPUT FILES:")
+    logger.info(f"  Proposal JSON:             {files['proposal_json']}")
+    logger.info(f"  Clean Slate Migration CSV: {files['clean_slate_csv']}")
+    logger.info(f"  Incremental Migration CSV: {files['incremental_csv']}")
+    logger.info("")
+    logger.info("Review the migration CSVs to see proposed moves.")
+    logger.info("Each row shows: file, current location, proposed location, reason.")
 
 
 def main():
@@ -305,6 +323,8 @@ Examples:
   python main.py --test              Test connection and permissions
   python main.py                     Run full crawl, output to ./output/
   python main.py --analyze           Phase 2: crawl + extract + classify + flows
+  python main.py --organize          Phase 3: propose folder structures from analysis
+  python main.py --organize --csv path/to/sp_analysis.csv  Use specific CSV
   python main.py --output ./results  Custom output directory
   python main.py --verbose           Enable detailed debug logging
         """,
@@ -319,6 +339,16 @@ Examples:
         "--analyze",
         action="store_true",
         help="Phase 2: crawl, extract content, classify with AI, discover flows",
+    )
+    parser.add_argument(
+        "--organize",
+        action="store_true",
+        help="Phase 3: propose folder structures from enriched CSV",
+    )
+    parser.add_argument(
+        "--csv",
+        default="",
+        help="Path to enriched CSV for --organize (auto-detects most recent if omitted)",
     )
     parser.add_argument(
         "--output",
@@ -339,6 +369,8 @@ Examples:
         test_connection(config)
     elif args.analyze:
         run_analysis(config, args.output)
+    elif args.organize:
+        run_organize(config, args.output, args.csv)
     else:
         run_crawl(config, args.output)
 
