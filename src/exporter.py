@@ -45,6 +45,7 @@ class CrawlExporter:
         "ai_keywords",
         "ai_confidence",
         "ai_suggested_folder",
+        "ai_client_or_entity",
         "ai_sensitivity_flag",
     ]
 

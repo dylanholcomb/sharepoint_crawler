@@ -41,6 +41,11 @@ Analyze the following document and return a JSON object with these fields:
   clean hierarchy. Use forward slashes. Example: "Finance/Budget Reports/FY2024"
   or "RFP Responses/CDPH/CalSYS". Keep it 2-4 levels deep.
 
+- "client_or_entity": The client, agency, vendor, or project this document relates to.
+  Look for organization names, project names, contract references, or agency names
+  in the content and filename. Examples: "CDPH", "CalTrans", "Mosaic Internal",
+  "RFP 24IT-OIS006". If unclear, use "Unknown".
+
 - "sensitivity_flag": One of "public", "internal", "confidential", or "review_needed".
   Flag as "review_needed" if the document appears to contain PII, financial data,
   legal agreements, or anything that should be reviewed before reorganizing.
@@ -187,6 +192,9 @@ class DocumentClassifier:
             doc["ai_confidence"] = classification.get("confidence", 0)
             doc["ai_suggested_folder"] = classification.get(
                 "suggested_folder", ""
+            )
+            doc["ai_client_or_entity"] = classification.get(
+                "client_or_entity", "Unknown"
             )
             doc["ai_sensitivity_flag"] = classification.get(
                 "sensitivity_flag", "review_needed"
