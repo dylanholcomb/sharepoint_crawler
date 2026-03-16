@@ -1,0 +1,13 @@
+packages:
+  "framer-motion": "For page transitions, animated lists, and smooth UI interactions."
+  "clsx": "Utility for conditionally joining classNames."
+  "tailwind-merge": "Utility for merging tailwind classes safely."
+
+images:
+  - path: "artifacts/sharepoint-reorganizer/public/images/hero-bg.png"
+    description: "A clean, abstract, enterprise-focused geometric background with soft intersecting shapes in light blue, slate, and white. Very minimal and professional."
+    aspect_ratio: "16:9"
+
+notes:
+  - "The app relies on VITE_API_BASE_URL and VITE_API_KEY environment variables to talk to the PythonAnywhere backend."
+  - "All API integrations are implemented in src/api/client.ts."
