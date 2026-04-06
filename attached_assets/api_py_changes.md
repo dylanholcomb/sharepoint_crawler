@@ -1,207 +1,177 @@
-# Changes needed in `src/api.py` — Multi-tenant OAuth support
+# Changes needed in `src/api.py` — Flask version
 
-These are the exact modifications to make your FastAPI backend accept delegated
-Microsoft OAuth tokens from the React frontend instead of (or alongside) the
-hardcoded service-account credentials.
+Your backend runs Flask (not FastAPI). All code below uses Flask patterns.
 
 ---
 
-## 1. Add new imports (top of file)
+## Priority 1: Fix CORS (this is why prod fails)
+
+Find your existing `flask_cors` setup and add your Replit deployed domain:
 
 ```python
-from fastapi import Header, Depends, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
-import httpx  # if not already installed: pip install httpx
+from flask_cors import CORS
+
+CORS(app, origins=[
+    "http://localhost:5173",
+    "http://localhost:21535",
+    "https://*.replit.dev",
+    "https://your-app-slug.replit.app",   # ← replace with your actual deployed domain
+])
 ```
+
+Or if you're using `ALLOWED_ORIGINS` from your `.env`, add the Replit domain there:
+
+```
+ALLOWED_ORIGINS=https://your-app-slug.replit.app
+```
+
+> This is almost certainly the entire reason "failed to fetch" happens in production
+> but not in dev.
 
 ---
 
-## 2. Update CORS origins
+## Priority 2: Accept Bearer token + site URL from headers (OAuth support)
 
-Find your existing `CORSMiddleware` setup (or add it if missing) and add your
-Replit app domain to the allowed origins:
-
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",                      # local dev
-        "http://localhost:21535",                     # Replit dev port
-        "https://*.replit.dev",                       # Replit preview domains
-        "https://your-app-slug.replit.app",           # ← replace with your actual .replit.app domain
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-> **Tip:** Your deployed Replit domain is shown in the browser address bar when
-> you click "Open in new tab" on the published app.
-
----
-
-## 3. Add an auth dependency
-
-This replaces the simple API key check and also captures the user's Bearer token
-and site URL from the request headers.
+In Flask, headers come from `request.headers`. Add a helper function to extract
+the auth context at the top of each route:
 
 ```python
 import os
+from flask import request, jsonify, abort
 
-API_KEY = os.getenv("API_KEY", "")  # already in your .env
+API_KEY = os.getenv("API_KEY", "")
 
+def get_auth_context():
+    """
+    Extract auth info from request headers.
+    Returns a dict with 'token' and 'site_url'.
+    Aborts with 401 if the API key is missing or wrong.
+    """
+    api_key = request.headers.get("X-API-Key")
+    if not API_KEY or api_key != API_KEY:
+        abort(401, description="Invalid or missing API key")
 
-class AuthContext:
-    def __init__(self, token: Optional[str], site_url: Optional[str]):
-        self.token = token
-        self.site_url = site_url
-
-
-async def require_auth(
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
-    authorization: Optional[str] = Header(None),
-    x_site_url: Optional[str] = Header(None, alias="X-Site-URL"),
-) -> AuthContext:
-    # Validate the app-level API key (keeps random callers out)
-    if not API_KEY or x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-    # Extract Bearer token if the frontend sent one
+    # Bearer token from Microsoft OAuth (optional — only present when user signed in)
     token = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization[len("Bearer "):]
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):]
 
-    return AuthContext(token=token, site_url=x_site_url)
+    # SharePoint site URL sent by the frontend
+    site_url = request.headers.get("X-Site-URL") or os.getenv("SP_SITE_URL", "")
+
+    return {"token": token, "site_url": site_url}
 ```
 
 ---
 
-## 4. Update your Graph API helper to use the delegated token
+## Priority 3: Update Graph API calls to use delegated token
 
-When `auth.token` is present, use it directly in the Authorization header for
-all Microsoft Graph calls. Fall back to your service-account credentials only
-when no token is provided (useful for CLI / testing).
+Replace wherever you currently call `msal_app.acquire_token_for_client()` and
+use hardcoded env-var credentials with this helper:
 
 ```python
-def get_graph_headers(auth: AuthContext) -> dict:
+import msal
+import requests as http_requests   # rename to avoid clash with flask's request
+
+def get_graph_token(auth_ctx: dict) -> str:
     """
-    Return Authorization headers for Microsoft Graph API calls.
-
-    - If the user signed in via OAuth on the frontend, use their delegated token.
-    - Otherwise fall back to the service-account token from MSAL client-credentials.
+    Return an access token for Microsoft Graph.
+    - Uses the user's delegated token when available (OAuth sign-in).
+    - Falls back to service-account token (your existing MSAL setup).
     """
-    if auth.token:
-        # Delegated flow — use the frontend's OAuth token directly
-        return {"Authorization": f"Bearer {auth.token}"}
-    else:
-        # Service-account fallback (your existing MSAL logic)
-        from msal import ConfidentialClientApplication
-        msal_app = ConfidentialClientApplication(
-            os.getenv("AZURE_CLIENT_ID"),
-            authority=f"https://login.microsoftonline.com/{os.getenv('AZURE_TENANT_ID')}",
-            client_credential=os.getenv("AZURE_CLIENT_SECRET"),
-        )
-        result = msal_app.acquire_token_for_client(
-            scopes=["https://graph.microsoft.com/.default"]
-        )
-        if "access_token" not in result:
-            raise HTTPException(status_code=500, detail="Could not acquire service token")
-        return {"Authorization": f"Bearer {result['access_token']}"}
+    if auth_ctx.get("token"):
+        return auth_ctx["token"]   # delegated — use as-is
+
+    # Service-account fallback (your existing approach)
+    msal_app = msal.ConfidentialClientApplication(
+        os.getenv("AZURE_CLIENT_ID"),
+        authority=f"https://login.microsoftonline.com/{os.getenv('AZURE_TENANT_ID')}",
+        client_credential=os.getenv("AZURE_CLIENT_SECRET"),
+    )
+    result = msal_app.acquire_token_for_client(
+        scopes=["https://graph.microsoft.com/.default"]
+    )
+    if "access_token" not in result:
+        abort(500, description="Could not acquire service token")
+    return result["access_token"]
 
 
-def get_site_url(auth: AuthContext) -> str:
-    """Return the SharePoint site URL — from the request header or .env fallback."""
-    return auth.site_url or os.getenv("SP_SITE_URL", "")
+def graph_headers(auth_ctx: dict) -> dict:
+    return {"Authorization": f"Bearer {get_graph_token(auth_ctx)}"}
 ```
 
 ---
 
-## 5. Update your endpoint signatures
+## Priority 4: Update your route handlers
 
-Add `auth: AuthContext = Depends(require_auth)` to each endpoint and replace
-hardcoded site-URL / token logic with the helpers above.
-
-### `POST /api/test-connection`
+Add `auth_ctx = get_auth_context()` at the top of each route, then pass
+`graph_headers(auth_ctx)` and `auth_ctx["site_url"]` to your Graph API calls:
 
 ```python
-@app.post("/api/test-connection")
-async def test_connection(auth: AuthContext = Depends(require_auth)):
-    site_url = get_site_url(auth)
-    headers = get_graph_headers(auth)
+@app.route("/api/test-connection", methods=["POST"])
+def test_connection():
+    auth_ctx = get_auth_context()
+    site_url = auth_ctx["site_url"]
+    headers = graph_headers(auth_ctx)
 
-    # Example: call Graph to verify the site exists
-    # Extract hostname and site path from site_url
-    # e.g. https://org.sharepoint.com/sites/MySite
-    async with httpx.AsyncClient() as client:
-        # Convert SharePoint site URL → Graph API site ID endpoint
-        # https://graph.microsoft.com/v1.0/sites/{hostname}:/{site-path}
-        parsed = site_url.rstrip("/").replace("https://", "")
-        hostname, _, path = parsed.partition("/")
-        graph_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{path}"
-        resp = await client.get(graph_url, headers=headers)
+    # Convert site URL to Graph API format:
+    # https://org.sharepoint.com/sites/MySite
+    # → https://graph.microsoft.com/v1.0/sites/org.sharepoint.com:/sites/MySite
+    parsed = site_url.rstrip("/").replace("https://", "")
+    hostname, _, path = parsed.partition("/")
+    graph_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{path}"
 
+    resp = http_requests.get(graph_url, headers=headers)
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail="Could not connect to SharePoint site")
+        return jsonify({"detail": "Could not connect to SharePoint site"}), resp.status_code
 
     data = resp.json()
-    return {"site_name": data.get("displayName", site_url), "site_id": data.get("id")}
-```
+    return jsonify({"site_name": data.get("displayName", site_url), "site_id": data.get("id")})
 
-### `POST /api/organize` and `POST /api/execute`
 
-Same pattern — add `auth: AuthContext = Depends(require_auth)` and pass
-`get_graph_headers(auth)` and `get_site_url(auth)` to wherever your existing
-code currently uses hardcoded credentials or `SP_SITE_URL`.
+@app.route("/api/organize", methods=["POST"])
+def organize():
+    auth_ctx = get_auth_context()
+    site_url = auth_ctx["site_url"]
+    headers = graph_headers(auth_ctx)
+    file = request.files["file"]
+    # ... rest of your existing organize logic,
+    # replacing hardcoded SP_SITE_URL / token with site_url / headers
 
-```python
-@app.post("/api/organize")
-async def organize(
-    file: UploadFile = File(...),
-    auth: AuthContext = Depends(require_auth),
-):
-    site_url = get_site_url(auth)
-    headers = get_graph_headers(auth)
-    # ... rest of your existing organize logic, but use site_url and headers
-    # instead of the hardcoded env vars / MSAL client
+
+@app.route("/api/execute", methods=["POST"])
+def execute():
+    auth_ctx = get_auth_context()
+    site_url = auth_ctx["site_url"]
+    headers = graph_headers(auth_ctx)
+    # ... rest of your existing execute logic
 ```
 
 ---
 
-## 6. Azure App Registration changes (one-time, in Azure Portal)
+## Azure App Registration (only needed for full OAuth multi-tenant sign-in)
 
-1. Go to **Azure Active Directory → App registrations → your app**
-2. **Authentication tab:**
-   - Add redirect URI: `https://your-app-slug.replit.app` (your deployed URL)
-   - Also add: `http://localhost:21535` for dev testing
-   - Enable **"Accounts in any organizational directory (Multi-tenant)"**
-3. **API permissions tab:**
-   - Ensure these **Delegated** permissions are added (not Application):
-     - `User.Read`
-     - `Sites.Read.All`
-     - `Files.ReadWrite.All`
-   - Click **"Grant admin consent"** for your tenant
+1. **Authentication tab** — add redirect URIs:
+   - `https://your-app-slug.replit.app`
+   - `http://localhost:21535`
+   - Set to **"Multi-tenant"**
+2. **API permissions** — add these as **Delegated** (not Application):
+   - `User.Read`
+   - `Sites.Read.All`
+   - `Files.ReadWrite.All`
+   - Click **"Grant admin consent"**
 
-> **Application vs Delegated permissions:** Your existing setup likely uses
-> Application permissions (service account). For OAuth login, you need the same
-> permissions as **Delegated** so they work with user tokens. You can keep both.
+> This step is only needed if you want end-users signing in with their own
+> Microsoft accounts. Your service-account approach still works fine for an
+> admin tool — you can skip this for now and come back to it.
 
 ---
 
-## Summary of what happens in the flow
+## Recommended order
 
-```
-User clicks "Sign in with Microsoft"
-    → MSAL popup (frontend)
-    → User authenticates with their Microsoft 365 account
-    → Frontend gets access_token with Sites.Read.All + Files.ReadWrite.All scopes
-    → Frontend sends: Authorization: Bearer <token>  +  X-Site-URL: https://...
-
-Backend receives request
-    → Validates X-API-Key (app-level gate)
-    → Extracts Bearer token + site URL
-    → Uses token directly in Microsoft Graph API calls
-    → Graph API enforces the user's own permissions — they can only access
-       SharePoint sites they already have access to in Microsoft 365
-```
+1. **Fix CORS first** — update `ALLOWED_ORIGINS` in your `.env` on PythonAnywhere
+   and reload the web app. This alone should fix the prod "failed to fetch" error.
+2. **Test** — click "Test Connection" in the deployed app. It should reach your backend now.
+3. **Add delegated auth later** — once CORS is working, apply the token/header
+   changes above to enable real multi-tenant OAuth login.
