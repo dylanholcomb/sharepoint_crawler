@@ -1,26 +1,75 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
-import { UploadCloud, CheckCircle, XCircle, ArrowRight, ShieldCheck, Database, Loader2 } from "lucide-react";
+import {
+  UploadCloud, CheckCircle, XCircle, ArrowRight,
+  Loader2, LogIn, User, Globe, ChevronRight
+} from "lucide-react";
+import { useMsal } from "@azure/msal-react";
+import { loginRequest } from "@/lib/msalConfig";
 import { testConnection, runOrganize } from "@/api/client";
 import { useMigration } from "@/context/MigrationContext";
+import type { MsalUser } from "@/context/MigrationContext";
 import { cn } from "@/lib/utils";
+
+type StepStatus = "idle" | "loading" | "done" | "error";
 
 export default function Home() {
   const [, setLocation] = useLocation();
-  const { setProposal } = useMigration();
-  
-  const [connStatus, setConnStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const { instance, accounts } = useMsal();
+  const {
+    setProposal,
+    accessToken, setAccessToken,
+    msalUser, setMsalUser,
+    siteUrl, setSiteUrl,
+  } = useMigration();
+
+  const [signInStatus, setSignInStatus] = useState<StepStatus>(
+    accounts.length > 0 ? "done" : "idle"
+  );
+  const [connStatus, setConnStatus] = useState<StepStatus>("idle");
   const [connMessage, setConnMessage] = useState("");
-  
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
+  const isSignedIn = accounts.length > 0 || signInStatus === "done";
+  const isConnected = connStatus === "done";
+
+  const handleSignIn = async () => {
+    setSignInStatus("loading");
+    try {
+      const result = await instance.loginPopup(loginRequest);
+      const user: MsalUser = {
+        name: result.account.name || result.account.username,
+        email: result.account.username,
+        tenantId: result.account.tenantId,
+      };
+      setMsalUser(user);
+      setAccessToken(result.accessToken);
+      setSignInStatus("done");
+    } catch (err: any) {
+      if (err.errorCode !== "user_cancelled") {
+        setSignInStatus("error");
+      } else {
+        setSignInStatus("idle");
+      }
+    }
+  };
+
+  const handleSignOut = () => {
+    instance.logoutPopup();
+    setAccessToken(null);
+    setMsalUser(null);
+    setSignInStatus("idle");
+    setConnStatus("idle");
+  };
+
   const handleTestConnection = async () => {
-    setConnStatus("testing");
-    const res = await testConnection();
+    setConnStatus("loading");
+    const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
+    const res = await testConnection(auth);
     if (res.success) {
-      setConnStatus("success");
+      setConnStatus("done");
       setConnMessage(res.message);
     } else {
       setConnStatus("error");
@@ -31,20 +80,16 @@ export default function Home() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     setIsUploading(true);
     setUploadError("");
-
     try {
+      const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
       if (file.name.endsWith(".json")) {
-        // Local parse for manual JSON overrides
         const text = await file.text();
-        const data = JSON.parse(text);
-        setProposal(data);
+        setProposal(JSON.parse(text));
         setLocation("/overview");
       } else if (file.name.endsWith(".csv")) {
-        // Run full organize pipeline on backend
-        const data = await runOrganize(file);
+        const data = await runOrganize(file, auth);
         setProposal(data);
         setLocation("/overview");
       } else {
@@ -54,126 +99,262 @@ export default function Home() {
       setUploadError(err.message || "Failed to process file");
     } finally {
       setIsUploading(false);
-      if (e.target) e.target.value = ""; // Reset input
+      if (e.target) e.target.value = "";
     }
   };
 
+  const steps = [
+    {
+      number: 1,
+      label: "Sign In",
+      done: isSignedIn,
+      active: !isSignedIn,
+    },
+    {
+      number: 2,
+      label: "Connect to SharePoint",
+      done: isConnected,
+      active: isSignedIn && !isConnected,
+    },
+    {
+      number: 3,
+      label: "Upload & Propose",
+      done: false,
+      active: isConnected,
+    },
+  ];
+
+  const displayUser = msalUser || (accounts[0]
+    ? { name: accounts[0].name || accounts[0].username, email: accounts[0].username, tenantId: accounts[0].tenantId }
+    : null);
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Hero Section */}
+      {/* Hero */}
       <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-sm">
         <div className="absolute inset-0 w-full h-full">
-          <img 
-            src={`${import.meta.env.BASE_URL}images/hero-bg.png`} 
-            alt="Hero background" 
+          <img
+            src={`${import.meta.env.BASE_URL}images/hero-bg.png`}
+            alt=""
             className="w-full h-full object-cover opacity-20"
           />
           <div className="absolute inset-0 bg-gradient-to-r from-white via-white/90 to-transparent" />
         </div>
-        
         <div className="relative p-8 md:p-12 lg:p-16 max-w-3xl">
           <h1 className="text-4xl md:text-5xl font-display font-bold text-slate-900 leading-tight">
-            Intelligently Reorganize <br className="hidden md:block"/>
+            Intelligently Reorganize <br className="hidden md:block" />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">
               SharePoint Storage
             </span>
           </h1>
           <p className="mt-4 text-lg text-slate-600 max-w-xl">
-            Upload your directory snapshot and let AI propose a clean, structured hierarchy. Review moves safely before executing them directly in SharePoint.
+            Sign in with your Microsoft account, connect to any SharePoint site, and let AI propose a clean folder structure — then execute it safely.
           </p>
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-6">
-        {/* Connection Card */}
-        <motion.div 
-          whileHover={{ y: -4 }}
-          className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm card-hover flex flex-col"
-        >
-          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mb-6">
-            <Database className="w-6 h-6" />
-          </div>
-          <h2 className="text-xl font-bold text-slate-900">Step 1: Connection</h2>
-          <p className="mt-2 text-slate-500 flex-1">
-            Ensure your API credentials and backend are properly configured to securely access SharePoint data.
-          </p>
-          
-          <div className="mt-8 space-y-4">
-            <button
-              onClick={handleTestConnection}
-              disabled={connStatus === "testing"}
-              className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-medium transition-colors shadow-sm disabled:opacity-70 flex items-center justify-center gap-2"
-            >
-              {connStatus === "testing" ? (
-                <><Loader2 className="w-5 h-5 animate-spin" /> Testing Connection...</>
-              ) : (
-                <><ShieldCheck className="w-5 h-5" /> Test SharePoint Connection</>
-              )}
-            </button>
-
-            {connStatus !== "idle" && (
+      {/* Step progress strip */}
+      <div className="flex items-center gap-2 px-1">
+        {steps.map((step, i) => (
+          <div key={step.number} className="flex items-center gap-2 flex-1">
+            <div className={cn(
+              "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium flex-1 transition-all",
+              step.done
+                ? "bg-green-50 text-green-700 border border-green-200"
+                : step.active
+                  ? "bg-blue-50 text-blue-700 border border-blue-200"
+                  : "bg-slate-50 text-slate-400 border border-slate-200"
+            )}>
               <div className={cn(
-                "p-4 rounded-xl text-sm flex items-start gap-3",
-                connStatus === "success" ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"
+                "w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",
+                step.done ? "bg-green-500 text-white" : step.active ? "bg-blue-500 text-white" : "bg-slate-300 text-slate-500"
               )}>
-                {connStatus === "success" ? <CheckCircle className="w-5 h-5 mt-0.5" /> : <XCircle className="w-5 h-5 mt-0.5" />}
-                <div className="flex-1 font-medium">{connMessage}</div>
+                {step.done ? <CheckCircle className="w-3.5 h-3.5" /> : step.number}
               </div>
+              <span className="truncate">{step.label}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <ChevronRight className="w-4 h-4 text-slate-300 flex-shrink-0" />
             )}
           </div>
-        </motion.div>
+        ))}
+      </div>
 
-        {/* Upload Card */}
-        <motion.div 
-          whileHover={{ y: -4 }}
-          className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm card-hover flex flex-col"
-        >
-          <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-6">
-            <UploadCloud className="w-6 h-6" />
-          </div>
-          <h2 className="text-xl font-bold text-slate-900">Step 2: Generate Proposal</h2>
-          <p className="mt-2 text-slate-500 flex-1">
-            Upload your CSV directory dump to generate an AI organization proposal, or load an existing JSON proposal.
-          </p>
-
-          <div className="mt-8 space-y-4">
-            <label className={cn(
-              "relative w-full py-8 px-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors group",
-              isUploading ? "border-indigo-300 bg-indigo-50/50" : "border-slate-300 hover:border-indigo-400 hover:bg-indigo-50/30"
+      {/* Step 1 — Sign In */}
+      <motion.div
+        whileHover={{ y: -2 }}
+        className={cn(
+          "bg-white rounded-2xl p-8 border shadow-sm",
+          isSignedIn ? "border-green-200 bg-green-50/30" : "border-slate-200"
+        )}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-4 flex-1">
+            <div className={cn(
+              "w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0",
+              isSignedIn ? "bg-green-100 text-green-600" : "bg-blue-50 text-blue-600"
             )}>
-              <input
-                type="file"
-                accept=".csv,.json"
-                onChange={handleFileUpload}
-                disabled={isUploading}
-                className="hidden"
-              />
-              {isUploading ? (
-                <div className="flex flex-col items-center text-indigo-600">
-                  <Loader2 className="w-8 h-8 animate-spin mb-3" />
-                  <span className="font-semibold">Processing Data...</span>
-                  <span className="text-sm mt-1 opacity-80">This may take a minute</span>
+              {isSignedIn ? <CheckCircle className="w-5 h-5" /> : <LogIn className="w-5 h-5" />}
+            </div>
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-slate-900">Step 1: Sign In with Microsoft</h2>
+              {isSignedIn && displayUser ? (
+                <div className="mt-3 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-blue-400 flex items-center justify-center text-white font-bold text-sm">
+                    {displayUser.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-900 text-sm">{displayUser.name}</div>
+                    <div className="text-xs text-slate-500">{displayUser.email}</div>
+                  </div>
                 </div>
               ) : (
-                <>
-                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 group-hover:bg-indigo-100 transition-colors">
-                    <ArrowRight className="w-6 h-6 text-slate-400 group-hover:text-indigo-600 -rotate-45" />
-                  </div>
-                  <span className="font-semibold text-slate-900">Click to upload files</span>
-                  <span className="text-sm text-slate-500 mt-1">Supports .csv dumps or existing .json proposals</span>
-                </>
+                <p className="mt-1 text-slate-500 text-sm">
+                  Sign in with your Microsoft 365 account to access your SharePoint.
+                </p>
               )}
-            </label>
-
-            {uploadError && (
-              <div className="p-4 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm font-medium flex items-start gap-3">
-                <XCircle className="w-5 h-5 mt-0.5" />
-                {uploadError}
-              </div>
-            )}
+            </div>
           </div>
-        </motion.div>
-      </div>
+          {!isSignedIn ? (
+            <button
+              onClick={handleSignIn}
+              disabled={signInStatus === "loading"}
+              className="flex-shrink-0 flex items-center gap-2 px-5 py-2.5 bg-[#0078d4] hover:bg-[#106ebe] text-white rounded-xl text-sm font-semibold transition-colors shadow-sm disabled:opacity-70"
+            >
+              {signInStatus === "loading"
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing in...</>
+                : <><User className="w-4 h-4" /> Sign in with Microsoft</>
+              }
+            </button>
+          ) : (
+            <button
+              onClick={handleSignOut}
+              className="flex-shrink-0 text-sm text-slate-400 hover:text-slate-600 underline"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Step 2 — Connect */}
+      <motion.div
+        whileHover={isSignedIn ? { y: -2 } : {}}
+        className={cn(
+          "bg-white rounded-2xl p-8 border shadow-sm transition-opacity",
+          !isSignedIn && "opacity-40 pointer-events-none",
+          isConnected ? "border-green-200 bg-green-50/30" : "border-slate-200"
+        )}
+      >
+        <div className="flex items-start gap-4">
+          <div className={cn(
+            "w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0",
+            isConnected ? "bg-green-100 text-green-600" : "bg-indigo-50 text-indigo-600"
+          )}>
+            {isConnected ? <CheckCircle className="w-5 h-5" /> : <Globe className="w-5 h-5" />}
+          </div>
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-slate-900">Step 2: Connect to SharePoint</h2>
+            <p className="mt-1 text-slate-500 text-sm">
+              Enter the URL of the SharePoint site you want to reorganize.
+            </p>
+            <div className="mt-4 space-y-3">
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={siteUrl}
+                  onChange={(e) => setSiteUrl(e.target.value)}
+                  placeholder="https://yourorg.sharepoint.com/sites/YourSite"
+                  className="flex-1 px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                />
+                <button
+                  onClick={handleTestConnection}
+                  disabled={connStatus === "loading" || !siteUrl}
+                  className="flex-shrink-0 flex items-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-semibold transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {connStatus === "loading"
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Testing...</>
+                    : "Test Connection"
+                  }
+                </button>
+              </div>
+              {connStatus !== "idle" && connStatus !== "loading" && (
+                <div className={cn(
+                  "p-3 rounded-xl text-sm flex items-center gap-2 border",
+                  connStatus === "done"
+                    ? "bg-green-50 text-green-800 border-green-200"
+                    : "bg-red-50 text-red-800 border-red-200"
+                )}>
+                  {connStatus === "done"
+                    ? <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                    : <XCircle className="w-4 h-4 flex-shrink-0" />
+                  }
+                  {connMessage}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Step 3 — Upload */}
+      <motion.div
+        whileHover={isConnected ? { y: -2 } : {}}
+        className={cn(
+          "bg-white rounded-2xl p-8 border shadow-sm transition-opacity",
+          !isConnected && "opacity-40 pointer-events-none",
+          "border-slate-200"
+        )}
+      >
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center flex-shrink-0">
+            <UploadCloud className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-slate-900">Step 3: Generate Proposal</h2>
+            <p className="mt-1 text-slate-500 text-sm">
+              Upload the enriched CSV from <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">main.py --analyze</code> to generate AI folder proposals, or load an existing JSON proposal.
+            </p>
+            <div className="mt-4 space-y-3">
+              <label className={cn(
+                "relative w-full py-8 px-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors group",
+                isUploading
+                  ? "border-violet-300 bg-violet-50/50"
+                  : "border-slate-300 hover:border-violet-400 hover:bg-violet-50/30"
+              )}>
+                <input
+                  type="file"
+                  accept=".csv,.json"
+                  onChange={handleFileUpload}
+                  disabled={isUploading}
+                  className="hidden"
+                />
+                {isUploading ? (
+                  <div className="flex flex-col items-center text-violet-600">
+                    <Loader2 className="w-8 h-8 animate-spin mb-3" />
+                    <span className="font-semibold">Processing Data...</span>
+                    <span className="text-sm mt-1 opacity-80">This may take a minute</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 group-hover:bg-violet-100 transition-colors">
+                      <ArrowRight className="w-6 h-6 text-slate-400 group-hover:text-violet-600 -rotate-45" />
+                    </div>
+                    <span className="font-semibold text-slate-900">Click to upload files</span>
+                    <span className="text-sm text-slate-500 mt-1">Supports .csv dumps or existing .json proposals</span>
+                  </>
+                )}
+              </label>
+              {uploadError && (
+                <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
+                  <XCircle className="w-4 h-4 flex-shrink-0" />
+                  {uploadError}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }

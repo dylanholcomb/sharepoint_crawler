@@ -19,12 +19,23 @@ export interface Proposal {
   incremental: ProposalPlan;
 }
 
-function getHeaders(isFormData = false) {
+export interface AuthContext {
+  token: string;
+  siteUrl: string;
+}
+
+function getHeaders(auth?: AuthContext, isFormData = false): Record<string, string> {
   const headers: Record<string, string> = {
     "X-API-Key": KEY,
   };
   if (!isFormData) {
     headers["Content-Type"] = "application/json";
+  }
+  if (auth?.token) {
+    headers["Authorization"] = `Bearer ${auth.token}`;
+  }
+  if (auth?.siteUrl) {
+    headers["X-Site-URL"] = auth.siteUrl;
   }
   return headers;
 }
@@ -34,31 +45,42 @@ export async function checkHealth(): Promise<{ status: string }> {
     const res = await fetch(`${BASE}/health`);
     if (!res.ok) throw new Error("Health check failed");
     return res.json();
-  } catch (err) {
+  } catch {
     return { status: "error" };
   }
 }
 
-export async function testConnection(): Promise<{ success: boolean; message: string }> {
+export async function testConnection(
+  auth?: AuthContext
+): Promise<{ success: boolean; message: string }> {
   try {
     const res = await fetch(`${BASE}/api/test-connection`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: getHeaders(auth),
     });
-    if (!res.ok) throw new Error("Connection failed");
-    return { success: true, message: "Successfully connected to SharePoint." };
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Connection failed");
+    }
+    const data = await res.json();
+    return {
+      success: true,
+      message: data.site_name
+        ? `Connected to "${data.site_name}"`
+        : "Successfully connected to SharePoint.",
+    };
   } catch (err: any) {
     return { success: false, message: err.message || "Failed to connect to SharePoint." };
   }
 }
 
-export async function runOrganize(file: File): Promise<Proposal> {
+export async function runOrganize(file: File, auth?: AuthContext): Promise<Proposal> {
   const formData = new FormData();
   formData.append("file", file);
 
   const res = await fetch(`${BASE}/api/organize`, {
     method: "POST",
-    headers: getHeaders(true),
+    headers: getHeaders(auth, true),
     body: formData,
   });
 
@@ -73,7 +95,8 @@ export async function runOrganize(file: File): Promise<Proposal> {
 export function executeMovesStream(
   assignments: { file_name: string; proposed_path: string }[],
   autoCreate: boolean,
-  onUpdate: (event: any) => void
+  onUpdate: (event: any) => void,
+  auth?: AuthContext
 ): () => void {
   const abortController = new AbortController();
 
@@ -81,8 +104,8 @@ export function executeMovesStream(
     try {
       const res = await fetch(`${BASE}/api/execute`, {
         method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ assignments, autoCreate }),
+        headers: getHeaders(auth),
+        body: JSON.stringify({ assignments, auto_create_folders: autoCreate }),
         signal: abortController.signal,
       });
 
@@ -103,17 +126,16 @@ export function executeMovesStream(
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             try {
-              const data = JSON.parse(line.slice(6));
-              onUpdate(data);
-            } catch (e) {
-              // Ignore partial chunk parse errors
+              onUpdate(JSON.parse(line.slice(6)));
+            } catch {
+              // ignore partial chunks
             }
           }
         }
       }
     } catch (err: any) {
       if (err.name === "AbortError") {
-        onUpdate({ phase: "error", message: "Execution cancelled by user." });
+        onUpdate({ phase: "cancelled", message: "Execution cancelled." });
       } else {
         onUpdate({ phase: "error", message: err.message || "Stream failed" });
       }

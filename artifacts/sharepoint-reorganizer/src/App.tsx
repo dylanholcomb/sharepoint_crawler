@@ -1,11 +1,11 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MsalProvider } from "@azure/msal-react";
+import type { PublicClientApplication } from "@azure/msal-browser";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-
 import { MigrationProvider } from "@/context/MigrationContext";
 import { Shell } from "@/components/layout/Shell";
-
 import Home from "@/pages/Home";
 import Overview from "@/pages/Overview";
 import ReviewMoves from "@/pages/ReviewMoves";
@@ -28,18 +28,20 @@ function Router() {
   );
 }
 
-function App() {
+function App({ msalInstance }: { msalInstance: PublicClientApplication }) {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <MigrationProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Router />
-          </WouterRouter>
-        </MigrationProvider>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <MsalProvider instance={msalInstance}>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <MigrationProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <Router />
+            </WouterRouter>
+          </MigrationProvider>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MsalProvider>
   );
 }
 
