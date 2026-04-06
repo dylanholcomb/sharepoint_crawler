@@ -6,18 +6,36 @@ Your backend runs Flask (not FastAPI). All code below uses Flask patterns.
 
 ## Priority 0: New `/api/analyze` endpoint (seamless proposal generation)
 
-This is the key endpoint that replaces the manual `main.py --analyze` + CSV upload flow.
-The frontend calls this when the user clicks "Analyze & Generate Proposal".
+### How the pipeline works (important context)
 
-It should:
-1. Use the SharePoint site URL from the `X-Site-URL` header
-2. Crawl all files in the site's default document library via Graph API
-3. Run the same AI analysis that `main.py --analyze` currently does
-4. Return the proposal JSON in the same format as `/api/organize`
+There are two intermediate artifacts in the current `main.py` workflow:
+
+| File | What it is | Role |
+|------|-----------|------|
+| `documents.csv` | Raw crawl + per-file AI classification | **Input** to the organizer. Columns: `file_name`, `file_path`, `size`, `last_modified`, `client`, `subcategory`, `keywords`, `summary`, `ai_suggested_folder`, `confidence` |
+| `proposal.json` | Folder tree + move plan | **Output** of the organizer. This is what the React frontend displays. |
+
+The pipeline is: **Crawl SharePoint → Classify each file (AI) → Organize into proposal**
+
+The `/api/analyze` endpoint should run all three phases and return `proposal.json` directly.
+The `documents.csv` becomes an internal intermediate — the user never needs to see it.
+
+### Frontend behaviour (already implemented)
+
+The frontend handles three paths automatically based on file type:
+- **"Analyze & Generate" button** → calls `POST /api/analyze` → full pipeline, returns proposal
+- **Upload `documents.csv`** → calls `POST /api/organize` (existing) → skips crawl+classify, re-runs organizer only
+- **Upload `proposal.json`** → loads directly, no backend call needed
+
+### The new endpoint
 
 ```python
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
+    """
+    Full pipeline: crawl SharePoint → classify files → organize → return proposal.
+    This combines what main.py --crawl, --classify, and --organize do separately.
+    """
     auth_ctx = get_auth_context()
     site_url = auth_ctx["site_url"]
     headers = graph_headers(auth_ctx)
@@ -25,7 +43,7 @@ def analyze():
     if not site_url:
         return jsonify({"detail": "No SharePoint site URL provided"}), 400
 
-    # 1. Get site ID from the site URL
+    # Phase 1: Crawl — get all files from SharePoint via Graph API
     parsed = site_url.rstrip("/").replace("https://", "")
     hostname, _, path = parsed.partition("/")
     graph_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{path}"
@@ -34,15 +52,19 @@ def analyze():
         return jsonify({"detail": "Could not connect to SharePoint site"}), site_resp.status_code
     site_id = site_resp.json()["id"]
 
-    # 2. List all files in the default drive (recursive)
-    #    This is equivalent to what main.py --analyze does when crawling
     drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
-    files = []
-    _collect_files(drive_url, headers, files)  # implement recursion as needed
+    raw_files = []
+    _collect_files(drive_url, headers, raw_files)
 
-    # 3. Run your existing AI analysis on the file list
-    #    (same logic as what main.py --analyze does before writing the CSV)
-    proposal = run_ai_analysis(files, site_url)  # your existing function
+    # Phase 2: Classify — run your existing per-file AI classification
+    # This is what main.py --classify does; it adds ai_suggested_folder + confidence to each file
+    # Your existing classify function takes the raw file list and returns enriched rows
+    classified = classify_files(raw_files)   # ← your existing function
+
+    # Phase 3: Organize — run your existing organizer on the enriched data
+    # This is what main.py --organize does (same as /api/organize but without a CSV upload)
+    # Your existing organizer function takes classified rows and returns the proposal dict
+    proposal = build_proposal(classified)    # ← your existing function
 
     return jsonify(proposal)
 
@@ -66,8 +88,10 @@ def _collect_files(url, headers, files, depth=0, max_depth=10):
                 "id": item["id"],
             })
         elif "folder" in item:
-            children_url = item.get("@microsoft.graph.downloadUrl") or \
-                f"https://graph.microsoft.com/v1.0/drives/{item['parentReference']['driveId']}/items/{item['id']}/children"
+            children_url = (
+                f"https://graph.microsoft.com/v1.0/drives/"
+                f"{item['parentReference']['driveId']}/items/{item['id']}/children"
+            )
             _collect_files(children_url, headers, files, depth + 1, max_depth)
 ```
 
@@ -75,7 +99,7 @@ def _collect_files(url, headers, files, depth=0, max_depth=10):
 ```json
 {
   "clean_slate": {
-    "folder_tree": { ... },
+    "folder_tree": { "Finance": { "2024": {} }, "HR": {} },
     "assignments": [
       {
         "file_name": "Budget 2024.xlsx",
@@ -93,10 +117,16 @@ def _collect_files(url, headers, files, depth=0, max_depth=10):
 }
 ```
 
-> **Note:** This can take 30–120 seconds for large sites. Consider adding a loading
-> message on the frontend (already done — the button shows "Scanning SharePoint…").
-> If PythonAnywhere times out on long requests, consider streaming progress via SSE
-> (same pattern as `/api/execute`).
+> **Timing note:** This can take 30–120 seconds for large sites (crawl + AI classify).
+> The frontend already shows "Scanning SharePoint & generating proposals…" during the wait.
+> PythonAnywhere free tier has a 5-minute request timeout — if sites are very large,
+> consider streaming progress updates via SSE (same pattern as `/api/execute`).
+
+### Also update `/api/organize` to accept rows directly (optional)
+
+Currently `/api/organize` reads a CSV file upload. If you want to also support the
+case where `documents.csv` is uploaded from the frontend, make sure your route reads
+`request.files["file"]` and parses it as CSV — which it likely already does.
 
 ---
 

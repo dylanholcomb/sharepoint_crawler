@@ -364,11 +364,11 @@ export default function Home() {
             {/* Divider */}
             <div className="mt-6 flex items-center gap-3">
               <div className="flex-1 h-px bg-slate-200" />
-              <span className="text-xs text-slate-400 font-medium">or load existing file</span>
+              <span className="text-xs text-slate-400 font-medium">or use a previous run</span>
               <div className="flex-1 h-px bg-slate-200" />
             </div>
 
-            {/* Secondary — file upload */}
+            {/* Secondary — file upload (two clear options) */}
             <div className="mt-4">
               {!showUpload ? (
                 <button
@@ -376,10 +376,21 @@ export default function Home() {
                   className="w-full py-2.5 px-4 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors flex items-center justify-center gap-2"
                 >
                   <UploadCloud className="w-4 h-4" />
-                  Upload CSV or JSON proposal
+                  Load from file
                 </button>
               ) : (
                 <div className="space-y-3">
+                  {/* Option descriptions */}
+                  <div className="grid grid-cols-2 gap-3 text-xs text-slate-500">
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                      <div className="font-semibold text-slate-700 mb-0.5">documents.csv</div>
+                      Re-run the organizer on a previous file crawl. Skips re-scanning SharePoint.
+                    </div>
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                      <div className="font-semibold text-slate-700 mb-0.5">proposal.json</div>
+                      Load a completed proposal directly — skips all analysis steps.
+                    </div>
+                  </div>
                   <label className={cn(
                     "relative w-full py-6 px-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors group",
                     isUploading
@@ -400,9 +411,9 @@ export default function Home() {
                       </div>
                     ) : (
                       <>
-                        <ArrowRight className="w-6 h-6 text-slate-400 group-hover:text-violet-500 -rotate-45 mb-2" />
+                        <UploadCloud className="w-6 h-6 text-slate-400 group-hover:text-violet-500 mb-2" />
                         <span className="font-medium text-slate-700 text-sm">Click to upload</span>
-                        <span className="text-xs text-slate-400 mt-0.5">.csv or .json</span>
+                        <span className="text-xs text-slate-400 mt-0.5">documents.csv or proposal.json</span>
                       </>
                     )}
                   </label>
