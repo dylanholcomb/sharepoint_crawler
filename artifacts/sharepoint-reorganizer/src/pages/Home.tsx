@@ -166,7 +166,7 @@ export default function Home() {
             </span>
           </h1>
           <p className="mt-4 text-lg text-slate-600 max-w-xl">
-            Sign in with your Microsoft account, connect to any SharePoint site, and let AI propose a clean folder structure — then execute it safely.
+            Sign in with your Microsoft account, connect to any SharePoint site, receive a clean folder structure proposal— then execute it safely.
           </p>
         </div>
       </div>
