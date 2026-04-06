@@ -1,0 +1,55 @@
+The problem: The AuthRedirect page is probably creating a new MSAL instance instead of using the same singleton that the rest of the app uses. When the popup opens, MSAL is waiting for handleRedirectPromise() to be called on the same instance that initiated the login. If a different instance handles it, the promise never resolves.
+The fix — tell them to update AuthRedirect.tsx to look exactly like this:
+typescriptimport { useEffect } from "react";
+import { msalInstance } from "../lib/msalConfig"; // ← must import the shared singleton
+
+export default function AuthRedirect() {
+  useEffect(() => {
+    msalInstance.handleRedirectPromise()
+      .then((result) => {
+        if (result) {
+          console.log("Auth redirect handled:", result.account?.username);
+        }
+      })
+      .catch((error) => {
+        console.error("Auth redirect error:", error);
+      });
+  }, []);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+      <p>Completing sign in...</p>
+    </div>
+  );
+}
+And msalConfig.ts (or wherever the MSAL instance lives) must export the instance:
+typescriptimport { PublicClientApplication } from "@azure/msal-browser";
+
+export const msalConfig = {
+  auth: {
+    clientId: "YOUR_CLIENT_ID",
+    authority: "https://login.microsoftonline.com/YOUR_TENANT_ID",
+    redirectUri: "https://replit-migration.replit.app/auth/redirect",
+  },
+};
+
+// Export the singleton — this SAME instance must be used everywhere
+export const msalInstance = new PublicClientApplication(msalConfig);
+And in main.tsx / App.tsx, it should be using that same exported instance:
+typescriptimport { msalInstance } from "./lib/msalConfig";
+import { MsalProvider } from "@azure/msal-react";
+
+// msalInstance.initialize() must be called before rendering
+await msalInstance.initialize();
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <MsalProvider instance={msalInstance}>
+    <App />
+  </MsalProvider>
+);
+The key things to check:
+
+msalInstance is a single exported object — not new PublicClientApplication(...) called in multiple places
+AuthRedirect.tsx imports that exported singleton directly (not via useMsal())
+msalInstance.initialize() is awaited before ReactDOM.createRoot renders
+The redirectUri in msalConfig exactly matches https://replit-migration.replit.app/auth/redirect (no trailing slash)
