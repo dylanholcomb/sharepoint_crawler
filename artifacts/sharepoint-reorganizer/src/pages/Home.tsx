@@ -3,11 +3,11 @@ import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import {
   UploadCloud, CheckCircle, XCircle, ArrowRight,
-  Loader2, LogIn, User, Globe, ChevronRight
+  Loader2, LogIn, User, Globe, ChevronRight, Sparkles
 } from "lucide-react";
 import { useMsal } from "@azure/msal-react";
 import { loginRequest } from "@/lib/msalConfig";
-import { testConnection, runOrganize } from "@/api/client";
+import { testConnection, runOrganize, runAnalyze } from "@/api/client";
 import { useMigration } from "@/context/MigrationContext";
 import type { MsalUser } from "@/context/MigrationContext";
 import { cn } from "@/lib/utils";
@@ -29,8 +29,11 @@ export default function Home() {
   );
   const [connStatus, setConnStatus] = useState<StepStatus>("idle");
   const [connMessage, setConnMessage] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [showUpload, setShowUpload] = useState(false);
 
   const isSignedIn = accounts.length > 0 || signInStatus === "done";
   const isConnected = connStatus === "done";
@@ -74,6 +77,21 @@ export default function Home() {
     } else {
       setConnStatus("error");
       setConnMessage(res.message);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setIsAnalyzing(true);
+    setAnalyzeError("");
+    try {
+      const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
+      const data = await runAnalyze(auth);
+      setProposal(data);
+      setLocation("/overview");
+    } catch (err: any) {
+      setAnalyzeError(err.message || "Failed to analyze SharePoint files");
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -297,7 +315,7 @@ export default function Home() {
         </div>
       </motion.div>
 
-      {/* Step 3 — Upload */}
+      {/* Step 3 — Generate */}
       <motion.div
         whileHover={isConnected ? { y: -2 } : {}}
         className={cn(
@@ -308,47 +326,92 @@ export default function Home() {
       >
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center flex-shrink-0">
-            <UploadCloud className="w-5 h-5" />
+            <Sparkles className="w-5 h-5" />
           </div>
           <div className="flex-1">
-            <h2 className="text-lg font-bold text-slate-900">Step 3: Generate Proposal</h2>
+            <h2 className="text-lg font-bold text-slate-900">Step 3: Generate Reorganization Proposal</h2>
             <p className="mt-1 text-slate-500 text-sm">
-              Upload the enriched CSV from <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">main.py --analyze</code> to generate AI folder proposals, or load an existing JSON proposal.
+              Let AI scan your SharePoint files and propose a clean folder structure — no manual steps needed.
             </p>
-            <div className="mt-4 space-y-3">
-              <label className={cn(
-                "relative w-full py-8 px-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors group",
-                isUploading
-                  ? "border-violet-300 bg-violet-50/50"
-                  : "border-slate-300 hover:border-violet-400 hover:bg-violet-50/30"
-              )}>
-                <input
-                  type="file"
-                  accept=".csv,.json"
-                  onChange={handleFileUpload}
-                  disabled={isUploading}
-                  className="hidden"
-                />
-                {isUploading ? (
-                  <div className="flex flex-col items-center text-violet-600">
-                    <Loader2 className="w-8 h-8 animate-spin mb-3" />
-                    <span className="font-semibold">Processing Data...</span>
-                    <span className="text-sm mt-1 opacity-80">This may take a minute</span>
-                  </div>
+
+            {/* Primary action */}
+            <div className="mt-5">
+              <button
+                onClick={handleAnalyze}
+                disabled={isAnalyzing || isUploading}
+                className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white rounded-xl font-semibold text-base transition-all shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Scanning SharePoint & generating proposals…
+                  </>
                 ) : (
                   <>
-                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3 group-hover:bg-violet-100 transition-colors">
-                      <ArrowRight className="w-6 h-6 text-slate-400 group-hover:text-violet-600 -rotate-45" />
-                    </div>
-                    <span className="font-semibold text-slate-900">Click to upload files</span>
-                    <span className="text-sm text-slate-500 mt-1">Supports .csv dumps or existing .json proposals</span>
+                    <Sparkles className="w-5 h-5" />
+                    Analyze & Generate Proposal
                   </>
                 )}
-              </label>
-              {uploadError && (
-                <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
+              </button>
+              {analyzeError && (
+                <div className="mt-3 p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
                   <XCircle className="w-4 h-4 flex-shrink-0" />
-                  {uploadError}
+                  {analyzeError}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="mt-6 flex items-center gap-3">
+              <div className="flex-1 h-px bg-slate-200" />
+              <span className="text-xs text-slate-400 font-medium">or load existing file</span>
+              <div className="flex-1 h-px bg-slate-200" />
+            </div>
+
+            {/* Secondary — file upload */}
+            <div className="mt-4">
+              {!showUpload ? (
+                <button
+                  onClick={() => setShowUpload(true)}
+                  className="w-full py-2.5 px-4 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors flex items-center justify-center gap-2"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  Upload CSV or JSON proposal
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <label className={cn(
+                    "relative w-full py-6 px-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-colors group",
+                    isUploading
+                      ? "border-violet-300 bg-violet-50/50"
+                      : "border-slate-300 hover:border-violet-400 hover:bg-violet-50/30"
+                  )}>
+                    <input
+                      type="file"
+                      accept=".csv,.json"
+                      onChange={handleFileUpload}
+                      disabled={isUploading}
+                      className="hidden"
+                    />
+                    {isUploading ? (
+                      <div className="flex flex-col items-center text-violet-600">
+                        <Loader2 className="w-7 h-7 animate-spin mb-2" />
+                        <span className="font-semibold text-sm">Processing…</span>
+                      </div>
+                    ) : (
+                      <>
+                        <ArrowRight className="w-6 h-6 text-slate-400 group-hover:text-violet-500 -rotate-45 mb-2" />
+                        <span className="font-medium text-slate-700 text-sm">Click to upload</span>
+                        <span className="text-xs text-slate-400 mt-0.5">.csv or .json</span>
+                      </>
+                    )}
+                  </label>
+                  {uploadError && (
+                    <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
+                      <XCircle className="w-4 h-4 flex-shrink-0" />
+                      {uploadError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

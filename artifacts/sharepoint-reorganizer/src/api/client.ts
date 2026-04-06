@@ -74,6 +74,20 @@ export async function testConnection(
   }
 }
 
+export async function runAnalyze(auth?: AuthContext): Promise<Proposal> {
+  const res = await fetch(`${BASE}/api/analyze`, {
+    method: "POST",
+    headers: getHeaders(auth),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to analyze SharePoint: ${text}`);
+  }
+
+  return res.json();
+}
+
 export async function runOrganize(file: File, auth?: AuthContext): Promise<Proposal> {
   const formData = new FormData();
   formData.append("file", file);

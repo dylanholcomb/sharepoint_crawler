@@ -4,6 +4,102 @@ Your backend runs Flask (not FastAPI). All code below uses Flask patterns.
 
 ---
 
+## Priority 0: New `/api/analyze` endpoint (seamless proposal generation)
+
+This is the key endpoint that replaces the manual `main.py --analyze` + CSV upload flow.
+The frontend calls this when the user clicks "Analyze & Generate Proposal".
+
+It should:
+1. Use the SharePoint site URL from the `X-Site-URL` header
+2. Crawl all files in the site's default document library via Graph API
+3. Run the same AI analysis that `main.py --analyze` currently does
+4. Return the proposal JSON in the same format as `/api/organize`
+
+```python
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    auth_ctx = get_auth_context()
+    site_url = auth_ctx["site_url"]
+    headers = graph_headers(auth_ctx)
+
+    if not site_url:
+        return jsonify({"detail": "No SharePoint site URL provided"}), 400
+
+    # 1. Get site ID from the site URL
+    parsed = site_url.rstrip("/").replace("https://", "")
+    hostname, _, path = parsed.partition("/")
+    graph_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{path}"
+    site_resp = http_requests.get(graph_url, headers=headers)
+    if site_resp.status_code != 200:
+        return jsonify({"detail": "Could not connect to SharePoint site"}), site_resp.status_code
+    site_id = site_resp.json()["id"]
+
+    # 2. List all files in the default drive (recursive)
+    #    This is equivalent to what main.py --analyze does when crawling
+    drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
+    files = []
+    _collect_files(drive_url, headers, files)  # implement recursion as needed
+
+    # 3. Run your existing AI analysis on the file list
+    #    (same logic as what main.py --analyze does before writing the CSV)
+    proposal = run_ai_analysis(files, site_url)  # your existing function
+
+    return jsonify(proposal)
+
+
+def _collect_files(url, headers, files, depth=0, max_depth=10):
+    """Recursively collect all files from a SharePoint drive folder."""
+    if depth > max_depth:
+        return
+    resp = http_requests.get(url, headers=headers)
+    if resp.status_code != 200:
+        return
+    items = resp.json().get("value", [])
+    for item in items:
+        if "file" in item:
+            files.append({
+                "name": item["name"],
+                "path": item.get("parentReference", {}).get("path", ""),
+                "size": item.get("size", 0),
+                "lastModified": item.get("lastModifiedDateTime", ""),
+                "webUrl": item.get("webUrl", ""),
+                "id": item["id"],
+            })
+        elif "folder" in item:
+            children_url = item.get("@microsoft.graph.downloadUrl") or \
+                f"https://graph.microsoft.com/v1.0/drives/{item['parentReference']['driveId']}/items/{item['id']}/children"
+            _collect_files(children_url, headers, files, depth + 1, max_depth)
+```
+
+**Response format** (same as `/api/organize` already returns):
+```json
+{
+  "clean_slate": {
+    "folder_tree": { ... },
+    "assignments": [
+      {
+        "file_name": "Budget 2024.xlsx",
+        "current_path": "/Documents/old folder/Budget 2024.xlsx",
+        "proposed_path": "/Finance/2024/Budget 2024.xlsx",
+        "reason": "Financial document grouped by year",
+        "confidence": 0.92
+      }
+    ]
+  },
+  "incremental": {
+    "folder_tree": { ... },
+    "assignments": [ ... ]
+  }
+}
+```
+
+> **Note:** This can take 30–120 seconds for large sites. Consider adding a loading
+> message on the frontend (already done — the button shows "Scanning SharePoint…").
+> If PythonAnywhere times out on long requests, consider streaming progress via SSE
+> (same pattern as `/api/execute`).
+
+---
+
 ## Priority 1: Fix CORS (this is why prod fails)
 
 Find your existing `flask_cors` setup and add your Replit deployed domain:
@@ -15,18 +111,15 @@ CORS(app, origins=[
     "http://localhost:5173",
     "http://localhost:21535",
     "https://*.replit.dev",
-    "https://your-app-slug.replit.app",   # ← replace with your actual deployed domain
+    "https://replit-migration.replit.app",
 ])
 ```
 
 Or if you're using `ALLOWED_ORIGINS` from your `.env`, add the Replit domain there:
 
 ```
-ALLOWED_ORIGINS=https://your-app-slug.replit.app
+ALLOWED_ORIGINS=https://replit-migration.replit.app
 ```
-
-> This is almost certainly the entire reason "failed to fetch" happens in production
-> but not in dev.
 
 ---
 
@@ -103,10 +196,9 @@ def graph_headers(auth_ctx: dict) -> dict:
 
 ---
 
-## Priority 4: Update your route handlers
+## Priority 4: Update your existing route handlers
 
-Add `auth_ctx = get_auth_context()` at the top of each route, then pass
-`graph_headers(auth_ctx)` and `auth_ctx["site_url"]` to your Graph API calls:
+Add `auth_ctx = get_auth_context()` at the top of each route:
 
 ```python
 @app.route("/api/test-connection", methods=["POST"])
@@ -115,9 +207,6 @@ def test_connection():
     site_url = auth_ctx["site_url"]
     headers = graph_headers(auth_ctx)
 
-    # Convert site URL to Graph API format:
-    # https://org.sharepoint.com/sites/MySite
-    # → https://graph.microsoft.com/v1.0/sites/org.sharepoint.com:/sites/MySite
     parsed = site_url.rstrip("/").replace("https://", "")
     hostname, _, path = parsed.partition("/")
     graph_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{path}"
@@ -133,11 +222,8 @@ def test_connection():
 @app.route("/api/organize", methods=["POST"])
 def organize():
     auth_ctx = get_auth_context()
-    site_url = auth_ctx["site_url"]
-    headers = graph_headers(auth_ctx)
     file = request.files["file"]
-    # ... rest of your existing organize logic,
-    # replacing hardcoded SP_SITE_URL / token with site_url / headers
+    # ... rest of your existing organize logic
 
 
 @app.route("/api/execute", methods=["POST"])
@@ -150,28 +236,9 @@ def execute():
 
 ---
 
-## Azure App Registration (only needed for full OAuth multi-tenant sign-in)
-
-1. **Authentication tab** — add redirect URIs:
-   - `https://your-app-slug.replit.app`
-   - `http://localhost:21535`
-   - Set to **"Multi-tenant"**
-2. **API permissions** — add these as **Delegated** (not Application):
-   - `User.Read`
-   - `Sites.Read.All`
-   - `Files.ReadWrite.All`
-   - Click **"Grant admin consent"**
-
-> This step is only needed if you want end-users signing in with their own
-> Microsoft accounts. Your service-account approach still works fine for an
-> admin tool — you can skip this for now and come back to it.
-
----
-
 ## Recommended order
 
-1. **Fix CORS first** — update `ALLOWED_ORIGINS` in your `.env` on PythonAnywhere
-   and reload the web app. This alone should fix the prod "failed to fetch" error.
-2. **Test** — click "Test Connection" in the deployed app. It should reach your backend now.
-3. **Add delegated auth later** — once CORS is working, apply the token/header
-   changes above to enable real multi-tenant OAuth login.
+1. **Add `/api/analyze`** — this is the biggest UX improvement; users no longer need to run `main.py` manually
+2. **Fix CORS** — update `ALLOWED_ORIGINS` to include `https://replit-migration.replit.app`
+3. **Test connection** — click "Test Connection" in the deployed app
+4. **Wire up delegated auth later** — once CORS + analyze work, apply the token/header changes for OAuth
