@@ -10,21 +10,27 @@ import Home from "@/pages/Home";
 import Overview from "@/pages/Overview";
 import ReviewMoves from "@/pages/ReviewMoves";
 import Execute from "@/pages/Execute";
+import AuthRedirect from "@/pages/AuthRedirect";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
 function Router() {
   return (
-    <Shell>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route path="/overview" component={Overview} />
-        <Route path="/review" component={ReviewMoves} />
-        <Route path="/execute" component={Execute} />
-        <Route component={NotFound} />
-      </Switch>
-    </Shell>
+    <Switch>
+      <Route path="/auth/redirect" component={AuthRedirect} />
+      <Route>
+        <Shell>
+          <Switch>
+            <Route path="/" component={Home} />
+            <Route path="/overview" component={Overview} />
+            <Route path="/review" component={ReviewMoves} />
+            <Route path="/execute" component={Execute} />
+            <Route component={NotFound} />
+          </Switch>
+        </Shell>
+      </Route>
+    </Switch>
   );
 }
 
