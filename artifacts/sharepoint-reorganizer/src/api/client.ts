@@ -74,18 +74,79 @@ export async function testConnection(
   }
 }
 
-export async function runAnalyze(auth?: AuthContext): Promise<Proposal> {
-  const res = await fetch(`${BASE}/api/analyze`, {
-    method: "POST",
-    headers: getHeaders(auth),
-  });
+export interface AnalyzeEvent {
+  phase: "crawl" | "classify" | "organize" | "complete" | "error";
+  status?: string;
+  message: string;
+  progress?: number;
+  proposal?: Proposal;
+}
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to analyze SharePoint: ${text}`);
-  }
+export function analyzeStream(
+  onEvent: (event: AnalyzeEvent) => void,
+  auth?: AuthContext
+): () => void {
+  const abortController = new AbortController();
 
-  return res.json();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/analyze`, {
+        method: "POST",
+        headers: getHeaders(auth),
+        signal: abortController.signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        onEvent({ phase: "error", message: `Failed to analyze SharePoint: ${text}` });
+        return;
+      }
+
+      // If the backend returns plain JSON (non-streaming), handle it gracefully
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) {
+        const data = await res.json();
+        onEvent({ phase: "complete", message: "Analysis complete.", proposal: data });
+        return;
+      }
+
+      if (!res.body) {
+        onEvent({ phase: "error", message: "No response body from server." });
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(line.slice(6)));
+            } catch {
+              // ignore malformed chunks
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        onEvent({ phase: "error", message: "Analysis cancelled." });
+      } else {
+        onEvent({ phase: "error", message: err.message || "Stream failed." });
+      }
+    }
+  })();
+
+  return () => abortController.abort();
 }
 
 export async function runOrganize(file: File, auth?: AuthContext): Promise<Proposal> {

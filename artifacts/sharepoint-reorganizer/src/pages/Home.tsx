@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 import { useMsal } from "@azure/msal-react";
 import { loginRequest } from "@/lib/msalConfig";
-import { testConnection, runOrganize, runAnalyze } from "@/api/client";
+import { testConnection, runOrganize, analyzeStream } from "@/api/client";
+import type { AnalyzeEvent } from "@/api/client";
 import { useMigration } from "@/context/MigrationContext";
 import type { MsalUser } from "@/context/MigrationContext";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,8 @@ export default function Home() {
   const [connMessage, setConnMessage] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
+  const [analyzeLog, setAnalyzeLog] = useState<string[]>([]);
+  const [analyzeProgress, setAnalyzeProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [showUpload, setShowUpload] = useState(false);
@@ -80,19 +83,30 @@ export default function Home() {
     }
   };
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = () => {
     setIsAnalyzing(true);
     setAnalyzeError("");
-    try {
-      const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
-      const data = await runAnalyze(auth);
-      setProposal(data);
-      setLocation("/overview");
-    } catch (err: any) {
-      setAnalyzeError(err.message || "Failed to analyze SharePoint files");
-    } finally {
-      setIsAnalyzing(false);
-    }
+    setAnalyzeLog([]);
+    setAnalyzeProgress(null);
+    const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
+
+    analyzeStream((event: AnalyzeEvent) => {
+      if (event.message) {
+        setAnalyzeLog((prev) => [...prev, event.message]);
+      }
+      if (event.progress != null) {
+        setAnalyzeProgress(event.progress);
+      }
+      if (event.phase === "complete" && event.proposal) {
+        setProposal(event.proposal);
+        setIsAnalyzing(false);
+        setLocation("/overview");
+      }
+      if (event.phase === "error") {
+        setAnalyzeError(event.message || "Analysis failed.");
+        setIsAnalyzing(false);
+      }
+    }, auth);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -335,7 +349,7 @@ export default function Home() {
             </p>
 
             {/* Primary action */}
-            <div className="mt-5">
+            <div className="mt-5 space-y-3">
               <button
                 onClick={handleAnalyze}
                 disabled={isAnalyzing || isUploading}
@@ -344,7 +358,7 @@ export default function Home() {
                 {isAnalyzing ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
-                    Scanning SharePoint & generating proposals…
+                    Running analysis…
                   </>
                 ) : (
                   <>
@@ -353,8 +367,43 @@ export default function Home() {
                   </>
                 )}
               </button>
+
+              {/* Live progress log */}
+              {isAnalyzing && analyzeLog.length > 0 && (
+                <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-4 space-y-1.5">
+                  {analyzeProgress != null && (
+                    <div className="mb-2">
+                      <div className="flex justify-between text-xs text-violet-700 mb-1">
+                        <span>Progress</span>
+                        <span>{Math.round(analyzeProgress)}%</span>
+                      </div>
+                      <div className="h-1.5 bg-violet-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-violet-500 rounded-full transition-all duration-300"
+                          style={{ width: `${analyzeProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {analyzeLog.map((msg, i) => (
+                    <div key={i} className={cn(
+                      "text-xs flex items-start gap-2",
+                      i === analyzeLog.length - 1 ? "text-violet-800 font-medium" : "text-violet-500"
+                    )}>
+                      <span className="mt-0.5 flex-shrink-0">
+                        {i === analyzeLog.length - 1
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <CheckCircle className="w-3 h-3" />
+                        }
+                      </span>
+                      {msg}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {analyzeError && (
-                <div className="mt-3 p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
+                <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-sm flex items-center gap-2">
                   <XCircle className="w-4 h-4 flex-shrink-0" />
                   {analyzeError}
                 </div>
