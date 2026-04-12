@@ -34,7 +34,9 @@ class CrawlExporter:
         "created_by",
         "modified_by",
         "web_url",
+        "drive_id",
         "item_id",
+        "drive_item_path",
     ]
 
     # Additional columns for Phase 2 — content analysis

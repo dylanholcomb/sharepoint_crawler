@@ -1,129 +1,155 @@
-# SharePoint Document Crawler
+# SharePoint Reorganization Toolkit
 
-A Python tool that crawls a SharePoint Online site, discovers all documents
-across all document libraries, and exports a complete inventory with metadata.
-Built for Mosaic Data Solutions' document reorganization initiative.
+End-to-end toolkit for SharePoint document discovery, AI-assisted reorganization
+planning, and controlled move execution.
 
-## What It Does
+This repository includes:
 
-- Authenticates to SharePoint Online via Microsoft Graph API
-- Recursively traverses all document libraries and folders
-- Collects metadata for every file: name, type, size, dates, authors, paths
-- Exports results as CSV (for spreadsheets), JSON (for programmatic use),
-  and a visual folder structure map
-- Identifies potential organizational issues (deeply nested files,
-  overstuffed folders)
+- CLI workflow for crawl/analysis/proposal generation (`main.py`)
+- Streamlit dashboard for human review + execution (`dashboard.py`, `pages/`)
+- Optional Flask API backend (`src/api.py`) for remote orchestration
 
-## Quick Start
+## What This Solves
 
-### 1. Prerequisites
+- Inventories documents across all SharePoint document libraries
+- Preserves stable source identifiers (`drive_id`, `item_id`) through planning
+- Generates reorganization proposals (clean-slate + incremental)
+- Lets admins approve/reject moves before execution
+- Executes approved moves using item IDs (not ambiguous path guesses)
 
-- PythonAnywhere account (Hacker tier or above — required for outbound
-  HTTP to Microsoft Graph API)
-- An Azure AD app registration with SharePoint permissions
-  (see `AZURE_SETUP.md` for step-by-step instructions)
+## Prerequisites
 
-### 2. Deploy to PythonAnywhere
+- Python 3.10+
+- Azure AD app registration with Microsoft Graph permissions
+  (see `AZURE_SETUP.md`)
+- SharePoint Online site URL
+- For Phase 2/3: Azure OpenAI deployment
 
-See `PYTHONANYWHERE_DEPLOY.md` for the full step-by-step guide. The short
-version:
+## 1) Setup
 
 ```bash
-cd ~
-git clone https://github.com/your-org/sp-crawler.git
-cd sp-crawler
-python3.10 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-nano .env   # fill in your Azure AD + SharePoint details
 ```
 
-### 3. Test Connection
+Edit `.env` and fill in:
+
+- `AZURE_TENANT_ID`
+- `AZURE_CLIENT_ID`
+- `AZURE_CLIENT_SECRET`
+- `SP_SITE_URL`
+- `AZURE_OPENAI_KEY` and `AZURE_OPENAI_ENDPOINT` (for analyze/organize)
+
+## 2) CLI End-to-End Flow
+
+### Step A — Validate connection
 
 ```bash
-python main.py --test
+python3 main.py --test
 ```
 
-### 4. Run the Crawl
+### Step B — Phase 2 analysis (crawl + extract + classify + flow advisory)
 
 ```bash
-python main.py
+python3 main.py --analyze --output ./output
 ```
 
-Results will be saved to the `./output/` directory.
+Key output:
 
-## Output Files
+- `sp_analysis_YYYYMMDD_HHMMSS.csv` (includes `drive_id`, `item_id`)
 
-Each crawl produces three files (timestamped):
+### Step C — Phase 3 proposal + migration CSVs
 
-| File | Format | Purpose |
-|------|--------|---------|
-| `sp_crawl_YYYYMMDD_HHMMSS.csv` | CSV | Spreadsheet-friendly inventory of all documents |
-| `sp_crawl_YYYYMMDD_HHMMSS.json` | JSON | Full data with summary statistics and analysis |
-| `sp_structure_YYYYMMDD_HHMMSS.txt` | Text | Visual tree of the current folder structure |
-
-### CSV Columns
-
-- `file_name` — Document filename
-- `extension` — File extension (.docx, .pdf, etc.)
-- `size_bytes` / `size_readable` — File size
-- `mime_type` — MIME type
-- `library_name` — SharePoint document library name
-- `folder_path` — Path within the library
-- `full_path` — Complete path (library + folder + filename)
-- `depth` — Folder nesting level (0 = library root)
-- `created_date` / `modified_date` — Timestamps
-- `created_by` / `modified_by` — Author names
-- `web_url` — Direct link to the file in SharePoint
-
-### JSON Summary
-
-The JSON export includes an analysis summary with:
-
-- File type distribution
-- Total and average file sizes
-- Folder depth analysis
-- Author distribution
-- Potential issues (overstuffed folders, deeply nested files)
-
-## Command Line Options
-
+```bash
+python3 main.py --organize --output ./output
 ```
-python main.py [OPTIONS]
+
+Key outputs:
+
+- `sp_proposal_YYYYMMDD_HHMMSS.json`
+- `sp_migration_clean_YYYYMMDD_HHMMSS.csv`
+- `sp_migration_incremental_YYYYMMDD_HHMMSS.csv`
+
+Migration CSV rows include:
+
+- `file_name`
+- `drive_id` (source drive)
+- `item_id` (source item ID)
+- `current_path`
+- `proposed_path`
+- `reason`
+
+## 3) Dashboard Flow (Human-in-the-loop)
+
+Start dashboard:
+
+```bash
+streamlit run dashboard.py
+```
+
+Then:
+
+1. Upload proposal JSON and migration CSV from `./output`
+2. Review and approve/reject moves in **Review Moves**
+3. Execute approved moves in **Execute**
+
+For local dashboard execution, create `.streamlit/secrets.toml` with:
+
+```toml
+azure_tenant_id = "..."
+azure_client_id = "..."
+azure_client_secret = "..."
+sp_site_url = "https://tenant.sharepoint.com/sites/YourSite"
+admin_password = "" # optional
+```
+
+## 4) Optional Backend API
+
+The Flask app in `src/api.py` provides:
+
+- `GET /health`
+- `POST /api/test-connection`
+- `POST /api/organize`
+- `POST /api/execute` (SSE progress)
+
+Run locally:
+
+```bash
+python3 src/api.py
+```
+
+Optional env vars:
+
+- `API_KEY` (for `X-API-Key` protection on `/api/*`)
+- `ALLOWED_ORIGINS` (comma-separated CORS allowlist)
+
+## Command Line Reference
+
+```bash
+python3 main.py [OPTIONS]
 
 Options:
-  --test            Test connection without crawling
+  --test            Test connection and permissions
+  --analyze         Phase 2: crawl + extract + classify + flow discovery
+  --organize        Phase 3: generate folder proposals + migration CSVs
+  --csv PATH        Specific enriched CSV for --organize
   --output DIR      Output directory (default: ./output)
   --verbose, -v     Enable debug logging
 ```
 
 ## Project Structure
 
+```text
+main.py                    # CLI entry point (phases 1-3)
+dashboard.py               # Streamlit dashboard entry
+pages/                     # Review + execute dashboard pages
+src/auth.py                # Graph auth client
+src/crawler.py             # SharePoint crawler
+src/extractor.py           # Text extraction
+src/classifier.py          # AI classification
+src/organizer.py           # Proposal generation
+src/migration_executor.py  # ID-based move execution
+src/api.py                 # Optional Flask API backend
 ```
-sp-crawler/
-├── main.py                  # Entry point and CLI
-├── src/
-│   ├── __init__.py
-│   ├── auth.py              # Microsoft Graph authentication
-│   ├── crawler.py           # SharePoint recursive crawler
-│   └── exporter.py          # CSV/JSON/structure export
-├── requirements.txt         # Python dependencies
-├── .env.example             # Configuration template
-├── .gitignore
-├── AZURE_SETUP.md           # Azure AD setup instructions
-├── PYTHONANYWHERE_DEPLOY.md # PythonAnywhere deployment guide
-└── README.md
-```
-
-## Next Steps
-
-This crawler is Phase 1 (Discovery) of the document reorganization tool.
-Upcoming phases:
-
-- **Phase 2 — Content Analysis**: Extract text from documents, classify
-  by topic using Azure OpenAI embeddings
-- **Phase 3 — Recommendations**: Suggest improved folder structures based
-  on document clustering and content similarity
-- **Phase 4 — Dashboard**: Streamlit interface for visualizing current vs.
-  proposed organization

@@ -258,6 +258,28 @@ class GraphOperations:
             )
             raise
 
+    def get_item(self, drive_id: str, item_id: str) -> Optional[dict]:
+        """
+        Retrieve a drive item by its item ID.
+
+        Args:
+            drive_id: The drive ID containing the item.
+            item_id: The Graph item ID to fetch.
+
+        Returns:
+            Item dict if found, otherwise None.
+        """
+        logger.debug(f"Fetching item by ID: {item_id} in drive {drive_id}")
+        try:
+            endpoint = f"/drives/{drive_id}/items/{item_id}"
+            response = self.auth_client.get(endpoint, {})
+            if not response or "id" not in response:
+                return None
+            return response
+        except Exception as e:
+            logger.debug(f"Error fetching item {item_id} in drive {drive_id}: {e}")
+            return None
+
     def find_item_by_path(self, drive_id: str, path: str) -> Optional[dict]:
         """
         Find an item by its full path.

@@ -191,22 +191,11 @@ def run_analysis(config: dict, output_dir: str):
     logger.info("Step 2/4: Extracting document content...")
     extractor = DocumentExtractor(auth)
 
-    libraries = crawler._get_document_libraries()
-    primary_drive_id = libraries[0]["id"] if libraries else ""
-
     for i, doc in enumerate(documents):
         if i % 20 == 0:
             logger.info(f"  Extracting: {i}/{len(documents)} documents")
 
-        drive_item_path = doc.get("drive_item_path", "")
-        drive_id = primary_drive_id
-
-        if "/drives/" in drive_item_path:
-            try:
-                parts = drive_item_path.split("/drives/")[1].split("/")
-                drive_id = parts[0]
-            except (IndexError, KeyError):
-                pass
+        drive_id = doc.get("drive_id", "")
 
         text = extractor.extract_text(
             drive_item_id=doc["item_id"],

@@ -7,7 +7,7 @@ folder creation, file moves, and comprehensive logging.
 
 import logging
 import time
-from typing import Dict, List, Optional, Generator, Any
+from typing import Dict, List, Generator, Any
 from dataclasses import dataclass
 
 from src.graph_operations import GraphOperations
@@ -52,8 +52,19 @@ class MigrationExecutor:
         logger.info(f"Initializing MigrationExecutor for site: {site_url}")
 
         try:
-            self.site_id, self.drive_id = self.graph_ops.resolve_site_and_drive(site_url)
-            logger.info(f"Resolved site_id={self.site_id}, drive_id={self.drive_id}")
+            self.site_id, self.default_drive_id = self.graph_ops.resolve_site_and_drive(
+                site_url
+            )
+            logger.info(
+                f"Resolved site_id={self.site_id}, default_drive_id={self.default_drive_id}"
+            )
+
+            drives = self.auth_client.get_all_pages(f"/sites/{self.site_id}/drives")
+            self.document_drives = {
+                d["id"]: d.get("name", "Unnamed")
+                for d in drives
+                if d.get("driveType") == "documentLibrary"
+            }
         except Exception as e:
             logger.error(f"Failed to initialize MigrationExecutor: {e}")
             raise ValueError(f"Cannot resolve site and drive: {e}") from e
@@ -87,16 +98,20 @@ class MigrationExecutor:
             logger.error(f"Preflight: Token error: {e}")
 
         # Check 2: Site resolution (already done in __init__, verify it worked)
-        if not self.site_id or not self.drive_id:
-            issues.append("Site and/or drive IDs not resolved")
-            logger.warning("Preflight: Site/drive resolution failed")
+        if not self.site_id:
+            issues.append("Site ID not resolved")
+            logger.warning("Preflight: Site resolution failed")
         else:
-            logger.info(f"Preflight: Site and drive resolved successfully")
+            logger.info("Preflight: Site resolved successfully")
+
+        if not self.document_drives:
+            issues.append("No document libraries discovered on site")
+            logger.warning("Preflight: No document libraries available")
 
         # Check 3: Site metadata (attempt to get site name)
         try:
             # Attempt to resolve root folder to validate drive access
-            root_folder = self.graph_ops.resolve_folder_path(self.drive_id, "")
+            root_folder = self.graph_ops.resolve_folder_path(self.default_drive_id, "")
             if root_folder:
                 drive_name = "Drive (accessible)"
                 site_name = self.site_url.split('/')[-1] or "SharePoint Site"
@@ -150,20 +165,35 @@ class MigrationExecutor:
 
         for idx, assignment in enumerate(assignments):
             file_name = assignment.get("file_name", "")
+            drive_id = assignment.get("drive_id") or self.default_drive_id
+            item_id = assignment.get("item_id", "")
             current_path = assignment.get("current_path", "")
             proposed_path = assignment.get("proposed_path", "")
             reason = assignment.get("reason", "")
 
-            # Check if file exists
+            # Check if source file exists
             try:
-                item = self.graph_ops.find_item_by_path(self.drive_id, current_path)
-                if item:
+                source_item = None
+                if drive_id and item_id:
+                    source_item = self.auth_client.get(
+                        f"/drives/{drive_id}/items/{item_id}", {}
+                    )
+                elif drive_id and current_path:
+                    source_item = self.graph_ops.find_item_by_path(drive_id, current_path)
+
+                if source_item and source_item.get("id"):
                     files_found += 1
-                    logger.debug(f"Dry run: Found file '{file_name}' at '{current_path}'")
+                    logger.debug(
+                        f"Dry run: Found file '{file_name}' "
+                        f"(drive={drive_id}, item={source_item.get('id')})"
+                    )
                 else:
                     files_missing += 1
                     missing_files.append(file_name)
-                    logger.warning(f"Dry run: File '{file_name}' not found at '{current_path}'")
+                    logger.warning(
+                        f"Dry run: File '{file_name}' not found "
+                        f"(drive={drive_id}, item={item_id}, path={current_path})"
+                    )
             except Exception as e:
                 files_missing += 1
                 missing_files.append(file_name)
@@ -171,7 +201,7 @@ class MigrationExecutor:
 
             # Check if target folder exists
             try:
-                folder_id = self.graph_ops.resolve_folder_path(self.drive_id, proposed_path)
+                folder_id = self.graph_ops.resolve_folder_path(drive_id, proposed_path)
                 if folder_id:
                     folders_exist += 1
                     logger.debug(f"Dry run: Target folder '{proposed_path}' exists")
@@ -237,11 +267,14 @@ class MigrationExecutor:
         target_folders = set()
         for assignment in assignments:
             proposed_path = assignment.get("proposed_path", "")
-            if proposed_path:
-                target_folders.add(proposed_path)
+            drive_id = assignment.get("drive_id") or self.default_drive_id
+            if proposed_path and drive_id:
+                target_folders.add((drive_id, proposed_path))
 
-        target_folders = sorted(list(target_folders))
-        logger.info(f"Identified {len(target_folders)} unique target folders")
+        target_folders = sorted(list(target_folders), key=lambda pair: (pair[0], pair[1]))
+        logger.info(
+            f"Identified {len(target_folders)} unique target folder targets"
+        )
 
         successes = 0
         failures = 0
@@ -253,10 +286,10 @@ class MigrationExecutor:
         if auto_create_folders:
             logger.info(f"Phase 1: Creating {len(target_folders)} target folders")
 
-            for idx, folder_path in enumerate(target_folders):
+            for idx, (drive_id, folder_path) in enumerate(target_folders):
                 try:
                     folder_id = self.graph_ops.create_folder_recursive(
-                        self.drive_id,
+                        drive_id,
                         folder_path
                     )
                     if folder_id:
@@ -267,7 +300,10 @@ class MigrationExecutor:
                             "phase": "folders",
                             "status": "success",
                             "file_name": None,
-                            "message": f"Created folder: {folder_path}",
+                            "message": (
+                                f"Created folder in "
+                                f"{self.document_drives.get(drive_id, drive_id)}: {folder_path}"
+                            ),
                             "current": idx + 1,
                             "total": len(target_folders)
                         }
@@ -279,7 +315,10 @@ class MigrationExecutor:
                             "phase": "folders",
                             "status": "error",
                             "file_name": None,
-                            "message": f"Failed to create folder: {folder_path}",
+                            "message": (
+                                f"Failed to create folder in "
+                                f"{self.document_drives.get(drive_id, drive_id)}: {folder_path}"
+                            ),
                             "current": idx + 1,
                             "total": len(target_folders)
                         }
@@ -291,7 +330,11 @@ class MigrationExecutor:
                         "phase": "folders",
                         "status": "error",
                         "file_name": None,
-                        "message": f"Error creating folder {folder_path}: {str(e)}",
+                        "message": (
+                            f"Error creating folder in "
+                            f"{self.document_drives.get(drive_id, drive_id)} "
+                            f"{folder_path}: {str(e)}"
+                        ),
                         "current": idx + 1,
                         "total": len(target_folders)
                     }
@@ -301,32 +344,38 @@ class MigrationExecutor:
 
         for idx, assignment in enumerate(assignments):
             file_name = assignment.get("file_name", "")
+            drive_id = assignment.get("drive_id") or self.default_drive_id
+            source_item_id = assignment.get("item_id", "")
             current_path = assignment.get("current_path", "")
             proposed_path = assignment.get("proposed_path", "")
             reason = assignment.get("reason", "")
 
             try:
-                # Find source file
-                source_item = self.graph_ops.find_item_by_path(self.drive_id, current_path)
-                if not source_item:
+                if not source_item_id and current_path:
+                    # Backward compatibility for old assignment files.
+                    source_item = self.graph_ops.find_item_by_path(drive_id, current_path)
+                    source_item_id = source_item.get("id", "") if source_item else ""
+
+                if not source_item_id:
                     skips += 1
-                    logger.warning(f"File not found: '{current_path}' (skipping)")
+                    logger.warning(
+                        f"File not found via IDs/path for '{file_name}' "
+                        f"(drive={drive_id}, item={assignment.get('item_id', '')}, path={current_path})"
+                    )
                     yield {
                         "progress": (idx + 1) / len(assignments),
                         "phase": "moves",
                         "status": "skip",
                         "file_name": file_name,
-                        "message": f"Source file not found: {current_path}",
+                        "message": "Source file not found (missing/invalid item_id)",
                         "current": idx + 1,
                         "total": len(assignments)
                     }
                     continue
 
-                source_item_id = source_item.get("id")
-
                 # Find target folder
                 target_folder = self.graph_ops.resolve_folder_path(
-                    self.drive_id,
+                    drive_id,
                     proposed_path
                 )
                 if not target_folder:
@@ -345,7 +394,7 @@ class MigrationExecutor:
 
                 # Move the file
                 moved_item = self.graph_ops.move_file(
-                    self.drive_id,
+                    drive_id,
                     source_item_id,
                     target_folder
                 )
@@ -353,7 +402,9 @@ class MigrationExecutor:
                 if moved_item:
                     successes += 1
                     logger.info(
-                        f"Moved file '{file_name}' from '{current_path}' to '{proposed_path}'"
+                        f"Moved file '{file_name}' "
+                        f"(drive={drive_id}, item={source_item_id}) "
+                        f"to '{proposed_path}'"
                     )
                     yield {
                         "progress": (idx + 1) / len(assignments),
