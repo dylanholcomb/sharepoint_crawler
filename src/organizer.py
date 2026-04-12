@@ -120,11 +120,11 @@ Rules:
 Return JSON with this structure:
 {
   "clean_slate": [
-    {"file_name": "...", "current_path": "...", "proposed_path": "...", "reason": "..."},
+    {"file_name": "...", "drive_id": "...", "item_id": "...", "current_path": "...", "proposed_path": "...", "reason": "..."},
     ...
   ],
   "incremental": [
-    {"file_name": "...", "current_path": "...", "proposed_path": "...", "reason": "..."},
+    {"file_name": "...", "drive_id": "...", "item_id": "...", "current_path": "...", "proposed_path": "...", "reason": "..."},
     ...
   ]
 }"""
@@ -429,7 +429,7 @@ class DocumentOrganizer:
 
         Returns:
             (clean_assignments, incremental_assignments) — two lists of
-            assignment dicts each with file_name, current_path,
+            assignment dicts each with file_name, drive_id, item_id, current_path,
             proposed_path, and reason.
         """
         clean_folder_list = self._flatten_tree(
@@ -485,7 +485,7 @@ class DocumentOrganizer:
         """Assign a batch of documents to both folder structures.
 
         Each document line now carries:
-          file_name | Client | Category | Subcategory | Keywords |
+          file_name | drive_id | item_id | Client | Category | Subcategory | Keywords |
           AI Summary | Classifier Suggested | Confidence | Current Path
 
         If either folder list is empty (e.g. fallback structure), the AI
@@ -500,6 +500,8 @@ class DocumentOrganizer:
 
             doc_lines.append(
                 f"- File: {doc.get('file_name', 'Unknown')}"
+                f" | Drive ID: {doc.get('drive_id', '')}"
+                f" | Item ID: {doc.get('item_id', '')}"
                 f" | Client: {doc.get('ai_client_or_entity', 'Unknown')}"
                 f" | Category: {doc.get('ai_category', '')}"
                 f" | Subcategory: {doc.get('ai_subcategory', '')}"
@@ -528,11 +530,13 @@ class DocumentOrganizer:
             "RULE: CLIENT/ENTITY goes at the top level, then document type.\n"
             "Use the 'Classifier suggested' path as a strong starting point — "
             "adjust only when a better match exists in the available folders.\n\n"
+            "Carry source identifiers through exactly: each assignment must include "
+            "the original document's drive_id and item_id.\n\n"
             f"CLEAN SLATE folders:\n{clean_folder_text}\n\n"
             f"INCREMENTAL folders:\n{incr_folder_text}\n\n"
             f"Documents to assign:\n{doc_list_text}\n\n"
             "Return JSON with 'clean_slate' and 'incremental' keys, each "
-            "containing a list of objects with: file_name, current_path, "
+            "containing a list of objects with: file_name, drive_id, item_id, current_path, "
             "proposed_path, reason."
         )
 
@@ -547,7 +551,8 @@ class DocumentOrganizer:
                 max_tokens=6000,
                 response_format={"type": "json_object"},
             )
-            return json.loads(response.choices[0].message.content)
+            parsed = json.loads(response.choices[0].message.content)
+            return self._normalize_assignment_payload(parsed, documents)
 
         except Exception as e:
             logger.warning(f"Batch assignment failed: {e}. Using heuristic fallback.")
@@ -571,6 +576,8 @@ class DocumentOrganizer:
 
             assignments.append({
                 "file_name": doc.get("file_name", ""),
+                "drive_id": doc.get("drive_id", ""),
+                "item_id": doc.get("item_id", ""),
                 "current_path": doc.get("full_path", ""),
                 "proposed_path": proposed,
                 "reason": reason,
@@ -581,6 +588,48 @@ class DocumentOrganizer:
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+
+    def _normalize_assignment_payload(self, payload: dict, documents: list) -> dict:
+        """Ensure assignment payload carries identifiers when available.
+
+        Backward compatibility note:
+        Older enriched CSVs may not include drive_id/item_id. In that case we keep
+        assignments and let execution use legacy path fallback.
+        """
+        by_item_id = {
+            (d.get("item_id") or ""): d for d in documents if d.get("item_id")
+        }
+        by_file_and_path = {
+            (d.get("file_name", ""), d.get("full_path", "")): d for d in documents
+        }
+
+        def normalize_list(items: list) -> list:
+            normalized = []
+            for assignment in items:
+                if not isinstance(assignment, dict):
+                    continue
+
+                item_id = assignment.get("item_id", "")
+                file_name = assignment.get("file_name", "")
+                current_path = assignment.get("current_path", "")
+                source_doc = by_item_id.get(item_id) or by_file_and_path.get(
+                    (file_name, current_path)
+                )
+
+                if source_doc:
+                    assignment["item_id"] = source_doc.get("item_id", "")
+                    assignment["drive_id"] = source_doc.get("drive_id", "")
+                    assignment.setdefault("file_name", source_doc.get("file_name", ""))
+                    assignment.setdefault("current_path", source_doc.get("full_path", ""))
+
+                if assignment.get("file_name") and assignment.get("proposed_path"):
+                    normalized.append(assignment)
+            return normalized
+
+        return {
+            "clean_slate": normalize_list(payload.get("clean_slate", [])),
+            "incremental": normalize_list(payload.get("incremental", [])),
+        }
 
     def _flatten_tree(self, tree: dict, prefix: str = "") -> list:
         """Flatten a folder tree dict into a list of path strings."""
@@ -629,6 +678,8 @@ class DocumentOrganizer:
 
             assignments.append({
                 "file_name": doc.get("file_name", ""),
+                "drive_id": doc.get("drive_id", ""),
+                "item_id": doc.get("item_id", ""),
                 "current_path": doc.get("full_path", ""),
                 "proposed_path": proposed,
                 "reason": (
@@ -685,7 +736,14 @@ class DocumentOrganizer:
             json.dump(proposal, f, indent=2, default=str)
         logger.info(f"Proposal JSON: {json_file}")
 
-        fieldnames = ["file_name", "current_path", "proposed_path", "reason"]
+        fieldnames = [
+            "file_name",
+            "drive_id",
+            "item_id",
+            "current_path",
+            "proposed_path",
+            "reason",
+        ]
 
         # Clean slate CSV
         clean_csv = output_path / f"sp_migration_clean_{timestamp}.csv"

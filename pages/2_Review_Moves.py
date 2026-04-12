@@ -23,7 +23,7 @@ if "status_filter" not in st.session_state:
 
 # Check if proposal is loaded
 if st.session_state["proposal"] is None:
-    st.warning("⚠️ No proposal loaded. Please go to the 'Scan & Analyze' page to load a proposal first.")
+    st.warning("⚠️ No proposal loaded. Please upload a proposal JSON from the main dashboard page first.")
     st.stop()
 
 proposal = st.session_state["proposal"]

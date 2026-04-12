@@ -150,10 +150,21 @@ class SharePointCrawler:
 
             elif "file" in item:
                 # It's a file — extract metadata
-                self._process_file(item, library_name, folder_path, depth)
+                self._process_file(
+                    item=item,
+                    drive_id=drive_id,
+                    library_name=library_name,
+                    folder_path=folder_path,
+                    depth=depth,
+                )
 
     def _process_file(
-        self, item: dict, library_name: str, folder_path: str, depth: int
+        self,
+        item: dict,
+        drive_id: str,
+        library_name: str,
+        folder_path: str,
+        depth: int,
     ):
         """Extract metadata from a file item and add it to the results.
 
@@ -185,6 +196,8 @@ class SharePointCrawler:
             item.get("parentReference", {}).get("path", "")
         )
 
+        normalized_folder = "" if folder_path == "/" else folder_path
+
         doc_record = {
             "file_name": file_name,
             "extension": extension,
@@ -193,13 +206,14 @@ class SharePointCrawler:
             "mime_type": item.get("file", {}).get("mimeType", ""),
             "library_name": library_name,
             "folder_path": folder_path if folder_path != "/" else "/",
-            "full_path": f"{library_name}{folder_path}/{file_name}",
+            "full_path": f"{library_name}{normalized_folder}/{file_name}",
             "depth": depth,
             "created_date": item.get("createdDateTime", ""),
             "modified_date": item.get("lastModifiedDateTime", ""),
             "created_by": created_by,
             "modified_by": modified_by,
             "web_url": item.get("webUrl", ""),
+            "drive_id": drive_id,
             "item_id": item.get("id", ""),
             "drive_item_path": parent_path,
         }
