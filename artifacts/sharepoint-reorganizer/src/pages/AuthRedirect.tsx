@@ -1,21 +1,4 @@
-import { useEffect } from "react";
-import { msalInstance } from "../lib/msalConfig";
-
 export default function AuthRedirect() {
-  useEffect(() => {
-    msalInstance
-      .initialize()
-      .then(() => msalInstance.handleRedirectPromise())
-      .then((result) => {
-        if (result) {
-          console.log("Auth redirect handled:", result.account?.username);
-        }
-      })
-      .catch((error) => {
-        console.error("Auth redirect error:", error);
-      });
-  }, []);
-
   return (
     <div style={{
       display: "flex",
