@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import {
@@ -6,7 +6,8 @@ import {
   Loader2, LogIn, User, Globe, ChevronRight, Sparkles
 } from "lucide-react";
 import { useMsal } from "@azure/msal-react";
-import { loginRequest } from "@/lib/msalConfig";
+import { LOGIN_SCOPES, GRAPH_SCOPES } from "@/lib/msalConfig";
+import { InteractionRequiredAuthError } from "@azure/msal-browser";
 import { testConnection, runOrganize, analyzeStream } from "@/api/client";
 import type { AnalyzeEvent } from "@/api/client";
 import { useMigration } from "@/context/MigrationContext";
@@ -41,32 +42,45 @@ export default function Home() {
   const isSignedIn = accounts.length > 0 || signInStatus === "done";
   const isConnected = connStatus === "done";
 
-  useEffect(() => {
-    const callbackId = instance.addEventCallback((event: any) => {
-      console.log("[MSAL]", event.eventType, event.interactionType ?? "", event.error ?? "");
-    });
-    return () => {
-      if (callbackId) instance.removeEventCallback(callbackId);
-    };
-  }, [instance]);
-
   const handleSignIn = async () => {
     setSignInStatus("loading");
     try {
-      const result = await instance.loginPopup({
-        ...loginRequest,
+      // Step 1: popup with minimal scopes — less consent friction
+      const loginResult = await instance.loginPopup({
+        scopes: LOGIN_SCOPES,
         redirectUri: window.location.origin + "/auth/popup.html",
       });
+
+      // Step 2: silently acquire Graph/SharePoint tokens now that session exists
+      let tokenResult;
+      try {
+        tokenResult = await instance.acquireTokenSilent({
+          scopes: GRAPH_SCOPES,
+          account: loginResult.account,
+        });
+      } catch (silentErr) {
+        if (silentErr instanceof InteractionRequiredAuthError) {
+          tokenResult = await instance.acquireTokenPopup({
+            scopes: GRAPH_SCOPES,
+            account: loginResult.account,
+            redirectUri: window.location.origin + "/auth/popup.html",
+          });
+        } else {
+          throw silentErr;
+        }
+      }
+
       const user: MsalUser = {
-        name: result.account.name || result.account.username,
-        email: result.account.username,
-        tenantId: result.account.tenantId,
+        name: loginResult.account.name || loginResult.account.username,
+        email: loginResult.account.username,
+        tenantId: loginResult.account.tenantId,
       };
       setMsalUser(user);
-      setAccessToken(result.accessToken);
+      setAccessToken(tokenResult.accessToken);
       setSignInStatus("done");
     } catch (err: any) {
       if (err.errorCode !== "user_cancelled") {
+        console.error("[Login error]", err);
         setSignInStatus("error");
       } else {
         setSignInStatus("idle");

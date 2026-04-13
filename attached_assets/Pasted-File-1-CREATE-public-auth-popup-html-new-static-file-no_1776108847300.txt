@@ -1,0 +1,133 @@
+File 1 — CREATE public/auth/popup.html (new static file, no React)
+This is the key architectural fix. The popup needs to land on a page that does nothing except let MSAL process the response — no React, no router, no provider.
+html<!DOCTYPE html>
+<html>
+  <head><title>Signing in...</title></head>
+  <body>
+    <script>
+      // This page is only loaded inside the MSAL popup window.
+      // It must NOT load the full React app — just signal MSAL.
+      // @azure/msal-browser is loaded from the parent window's context automatically.
+    </script>
+  </body>
+</html>
+Place this at public/auth/popup.html so Vite serves it as a static file at /auth/popup.html.
+
+File 2 — src/lib/msalConfig.ts (update redirectUri)
+typescript// BEFORE
+const msalConfig = {
+  auth: {
+    clientId: "a16dee1e-dafd-4334-8e4f-95212e9389b6",
+    authority: "https://login.microsoftonline.com/4b443fe5-100a-489e-b6bb-b6685b55cd96",
+    redirectUri: window.location.origin + "/auth/redirect",
+    postLogoutRedirectUri: window.location.origin,
+  },
+  cache: { cacheLocation: "localStorage" },
+};
+
+// AFTER
+const msalConfig = {
+  auth: {
+    clientId: "a16dee1e-dafd-4334-8e4f-95212e9389b6",
+    authority: "https://login.microsoftonline.com/4b443fe5-100a-489e-b6bb-b6685b55cd96",
+    redirectUri: window.location.origin + "/auth/popup.html", // ← popup lands here
+    postLogoutRedirectUri: window.location.origin,
+  },
+  cache: { cacheLocation: "localStorage" },
+};
+
+export const msalInstance = new PublicClientApplication(msalConfig);
+
+// Scopes split into two tiers — login first, graph permissions after
+export const LOGIN_SCOPES = ["openid", "profile", "User.Read"];
+export const GRAPH_SCOPES = [
+  "https://graph.microsoft.com/Sites.Read.All",
+  "https://graph.microsoft.com/Files.ReadWrite.All",
+];
+
+File 3 — Login button handler (wherever loginPopup is called)
+typescript// BEFORE
+await instance.loginPopup({
+  scopes: ["User.Read", "https://graph.microsoft.com/Sites.Read.All", "..."],
+});
+
+// AFTER — step 1: login only, step 2: acquire graph tokens silently
+import { msalInstance, LOGIN_SCOPES, GRAPH_SCOPES } from "../lib/msalConfig";
+
+async function handleLogin() {
+  try {
+    // Step 1: popup login with minimal scopes
+    const loginResult = await msalInstance.loginPopup({
+      scopes: LOGIN_SCOPES,
+      redirectUri: `${window.location.origin}/auth/popup.html`, // explicit
+    });
+
+    // Step 2: silently get graph/SharePoint tokens now that we have a session
+    const tokenResult = await msalInstance.acquireTokenSilent({
+      scopes: GRAPH_SCOPES,
+      account: loginResult.account,
+    });
+
+    console.log("Signed in:", loginResult.account.username);
+    // store tokenResult.accessToken for API calls
+
+  } catch (err: any) {
+    // If silent token fails (consent needed), fall back to popup
+    if (err.name === "InteractionRequiredAuthError") {
+      await msalInstance.acquireTokenPopup({
+        scopes: GRAPH_SCOPES,
+        redirectUri: `${window.location.origin}/auth/popup.html`,
+      });
+    } else {
+      console.error("[Login error]", err);
+    }
+  }
+}
+
+File 4 — main.tsx (await init, add event logging)
+typescriptimport { msalInstance } from "./lib/msalConfig";
+
+// Await initialization before React renders — required for MSAL v3
+msalInstance.initialize().then(() => {
+
+  // Add event logging so we can see exactly where it stalls
+  msalInstance.addEventCallback((event) => {
+    console.log("[MSAL]", event.eventType, event.interactionType ?? "", event.error ?? "");
+  });
+
+  createRoot(document.getElementById("root")!).render(
+    <App msalInstance={msalInstance} />
+  );
+});
+
+File 5 — AuthRedirect.tsx (simplify — this is now only for redirect flow, not popup)
+typescript// This component is only reached in redirect flow (not popup flow).
+// With popup.html as the redirectUri, this page won't be hit during login.
+// Keep it as a safety fallback.
+
+import { useEffect } from "react";
+import { msalInstance } from "../lib/msalConfig";
+
+export default function AuthRedirect() {
+  useEffect(() => {
+    msalInstance.handleRedirectPromise()
+      .then((result) => {
+        if (result) {
+          console.log("[AuthRedirect] handled:", result.account?.username);
+          window.location.replace("/"); // send back to home after redirect login
+        }
+      })
+      .catch(console.error);
+  }, []);
+
+  return <div>Completing sign in...</div>;
+}
+
+Azure Portal — one thing to verify:
+Add https://replit-migration.replit.app/auth/popup.html as a new Single-page application redirect URI. The existing /auth/redirect entry can stay — it's just not used for popup flow anymore.
+
+After deploying, open the browser console and paste this to verify the event flow:
+javascript// Should see in order:
+// [MSAL] login_start popup ...
+// [MSAL] login_success popup ...
+If instead you see login_failure with an AADSTS code, paste that code here and I'll tell you exactly what it means
