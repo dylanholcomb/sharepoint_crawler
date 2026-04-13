@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import {
@@ -41,10 +41,22 @@ export default function Home() {
   const isSignedIn = accounts.length > 0 || signInStatus === "done";
   const isConnected = connStatus === "done";
 
+  useEffect(() => {
+    const callbackId = instance.addEventCallback((event: any) => {
+      console.log("[MSAL]", event.eventType, event.interactionType ?? "", event.error ?? "");
+    });
+    return () => {
+      if (callbackId) instance.removeEventCallback(callbackId);
+    };
+  }, [instance]);
+
   const handleSignIn = async () => {
     setSignInStatus("loading");
     try {
-      const result = await instance.loginPopup(loginRequest);
+      const result = await instance.loginPopup({
+        ...loginRequest,
+        redirectUri: window.location.origin + "/auth/popup.html",
+      });
       const user: MsalUser = {
         name: result.account.name || result.account.username,
         email: result.account.username,

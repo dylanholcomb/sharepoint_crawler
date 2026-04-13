@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Completing sign in...</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: sans-serif;
+      background: #f8fafc;
+    }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid #0078d4;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    p { margin: 0; font-size: 14px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div style="text-align:center">
+    <div class="spinner"></div>
+    <p>Completing sign in...</p>
+  </div>
+
+  <script src="https://unpkg.com/@azure/msal-browser@5.6.3/dist/msal-browser.min.js"></script>
+  <script>
+    const msalInstance = new msal.PublicClientApplication({
+      auth: {
+        clientId: "a16dee1e-dafd-4334-8e4f-95212e9389b6",
+        authority: "https://login.microsoftonline.com/4b443fe5-100a-489e-b6bb-b6685b55cd96",
+        redirectUri: window.location.origin + "/auth/popup.html",
+      },
+      cache: { cacheLocation: "localStorage" },
+    });
+
+    msalInstance.initialize()
+      .then(function () {
+        return msalInstance.handleRedirectPromise();
+      })
+      .then(function (result) {
+        if (result && result.account) {
+          msalInstance.setActiveAccount(result.account);
+        }
+      })
+      .catch(function (err) {
+        console.error("[popup.html] MSAL error:", err);
+      })
+      .finally(function () {
+        if (window.opener) {
+          window.close();
+        }
+      });
+  </script>
+</body>
+</html>

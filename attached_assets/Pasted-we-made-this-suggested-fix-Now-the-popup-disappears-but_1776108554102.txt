@@ -1,0 +1,44 @@
+we made this suggested fix. Now the popup disappears but the sign in just spins on the page. I think there may be something bigger happening around MS login protocols?
+
+Yes — this does sound like a protocol-flow mismatch, not just a UI bug.
+
+What’s likely happening
+You’re using loginPopup but your app also has redirect-handling logic on /auth/redirect (and likely global handleRedirectPromise in app bootstrap/provider).
+That creates a race:
+
+Popup returns from Microsoft to /auth/redirect
+Your SPA code in the popup processes/clears the auth response itself
+Parent window’s loginPopup() promise never receives the expected completion signal
+Parent stays in "Signing in..." forever
+So the popup vanishing is expected after your change, but the parent spinner means the popup flow never resolved correctly.
+
+Correct architecture for MSAL popup flow
+1) Use a dedicated static popup redirect URI
+Use something like:
+
+https://replit-migration.replit.app/auth/popup.html
+That file should be plain/minimal HTML (no React app boot, no router, no msal-react provider mount).
+
+2) Register that URI in Azure App Registration (SPA redirect URIs)
+Also keep your normal app root URI if needed.
+
+3) For popup login, pass redirect URI explicitly
+
+await instance.loginPopup({
+  scopes: ["User.Read"],
+  redirectUri: `${window.location.origin}/auth/popup.html`,
+});
+4) Do not run handleRedirectPromise() in popup callback page
+Only run redirect handling in main app for redirect flows.
+
+Additional hardening (important)
+Split auth into two steps:
+loginPopup with minimal scopes (openid profile User.Read)
+acquireTokenSilent for SharePoint/Graph scopes afterwards
+Add MSAL event logging to see where it stalls:
+
+instance.addEventCallback((e) => {
+  console.log("[MSAL]", e.eventType, e.interactionType, e.error);
+});
+If still failing, check Entra sign-in logs for AADSTS codes (50011, 65001, etc.).
+If you want, I can give you a precise “before/after” patch for your React/MSAL setup (provider init + login handler + popup callback file) so you can drop it in directly.
