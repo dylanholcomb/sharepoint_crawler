@@ -3,7 +3,9 @@ import { msalInstance } from "../lib/msalConfig";
 
 export default function AuthRedirect() {
   useEffect(() => {
-    msalInstance.handleRedirectPromise()
+    msalInstance
+      .initialize()
+      .then(() => msalInstance.handleRedirectPromise())
       .then((result) => {
         if (result) {
           console.log("Auth redirect handled:", result.account?.username);
