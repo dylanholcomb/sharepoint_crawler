@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
-import { useMigration } from "@/context/MigrationContext";
+import { useMigration, assignmentKey } from "@/context/MigrationContext";
 import { Check, X, Pencil, ChevronRight, ChevronDown, CheckCircle2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -38,20 +38,24 @@ export default function ReviewMoves() {
     setExpandedGroups(prev => ({ ...prev, [group]: !prev[group] }));
   };
 
-  const approve = (fileName: string, proposedPath: string) => {
-    setApprovedMoves(prev => ({ ...prev, [fileName]: proposedPath }));
+  const approve = (assignment: typeof assignments[0], proposedPath: string) => {
+    const key = assignmentKey(assignment);
+    setApprovedMoves(prev => ({ ...prev, [key]: { ...assignment, proposed_path: proposedPath } }));
   };
 
-  const reject = (fileName: string) => {
+  const reject = (assignment: typeof assignments[0]) => {
+    const key = assignmentKey(assignment);
     setApprovedMoves(prev => {
       const next = { ...prev };
-      delete next[fileName];
+      delete next[key];
       return next;
     });
   };
 
-  const isApproved = (fileName: string) => fileName in approvedMoves;
-  
+  const isApproved = (assignment: typeof assignments[0]) => assignmentKey(assignment) in approvedMoves;
+  const getApprovedPath = (assignment: typeof assignments[0]) =>
+    approvedMoves[assignmentKey(assignment)]?.proposed_path ?? assignment.proposed_path;
+
   const approvedCount = Object.keys(approvedMoves).length;
   const pendingCount = assignments.length - approvedCount;
 
@@ -86,7 +90,7 @@ export default function ReviewMoves() {
       <div className="space-y-4">
         {Object.entries(grouped).map(([groupName, items]) => {
           const isOpen = expandedGroups[groupName] !== false; // open by default
-          const groupApproved = items.filter(i => isApproved(i.file_name)).length;
+          const groupApproved = items.filter(i => isApproved(i)).length;
 
           return (
             <div key={groupName} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
@@ -110,12 +114,12 @@ export default function ReviewMoves() {
                 <div className="p-4 space-y-3">
                   {items.map((item) => (
                     <MoveRow 
-                      key={item.file_name} 
+                      key={assignmentKey(item)} 
                       assignment={item} 
-                      status={isApproved(item.file_name) ? "approved" : "pending"}
-                      approvedPath={approvedMoves[item.file_name] || item.proposed_path}
-                      onApprove={(path) => approve(item.file_name, path)}
-                      onReject={() => reject(item.file_name)}
+                      status={isApproved(item) ? "approved" : "pending"}
+                      approvedPath={getApprovedPath(item)}
+                      onApprove={(path) => approve(item, path)}
+                      onReject={() => reject(item)}
                     />
                   ))}
                 </div>

@@ -18,9 +18,12 @@ export default function Execute() {
   const cancelRef = useRef<(() => void) | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const assignments = Object.entries(approvedMoves).map(([file_name, proposed_path]) => ({
-    file_name,
-    proposed_path,
+  const assignments = Object.values(approvedMoves).map((a) => ({
+    file_name: a.file_name,
+    proposed_path: a.proposed_path,
+    drive_id: a.drive_id,
+    item_id: a.item_id,
+    drive_item_path: a.drive_item_path,
   }));
 
   // Auto-scroll log

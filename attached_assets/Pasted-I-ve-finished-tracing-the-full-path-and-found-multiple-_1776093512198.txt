@@ -1,0 +1,95 @@
+I’ve finished tracing the full path and found multiple concrete handoff gaps (not just one bug), especially around execution path contracts and environment setup; I’ll summarize them in priority order with file-level references and what each breaks.You’re not missing just one thing — there are a few handoff gaps that would make “end-to-end” fail even if each piece works alone.
+
+Most likely blockers (in order)
+Execution path contract mismatch (major)
+
+src/crawler.py:196 builds full_path as "{library_name}{folder_path}/{file_name}" (root can become Library//file).
+src/organizer.py then uses that as current_path in assignments (:574, :632).
+src/migration_executor.py resolves one drive only (:55) and looks up files by find_item_by_path(self.drive_id, current_path) (:310).
+Result: for multi-library sites (or paths including library prefix), moves can’t find source files.
+Single-drive assumption in migration stage
+
+GraphOperations.resolve_site_and_drive returns the first document library (src/graph_operations.py:31-71).
+No per-document drive_id is carried into execute assignments.
+End result: files outside that primary drive are skipped/failed.
+Missing runtime setup artifacts
+
+Docs reference .env.example in multiple places (README.md, AZURE_SETUP.md, PYTHONANYWHERE_DEPLOY.md, and main.py:66) but file is missing.
+.streamlit config is likely misspelled as .streamlight/config.toml; Streamlit won’t auto-read this path.
+src/api.py imports Flask/CORS, but requirements.txt does not include flask / flask-cors.
+Dashboard flow is not truly end-to-end
+
+dashboard.py only supports uploading proposal + migration CSV; it does not run crawl/analyze/organize stages.
+pages/2_Review_Moves.py:26 tells users to go to a “Scan & Analyze” page that doesn’t exist.
+Secondary gaps
+Docs out of sync with code capabilities
+README is mostly Phase 1 oriented; no clear runbook for --analyze, --organize, dashboard + API workflow together.
+Approval identity collision risk
+Review page keys approvals by file_name only; duplicates across folders/libraries can overwrite each other.
+If you want, I can fix this directly by implementing a true execution contract:
+
+carry drive_id + item_id through CSV/proposal,
+execute moves by IDs (not ambiguous paths),
+add missing setup files (.env.example, proper .streamlit/, backend deps),
+and update docs into one real end-to-end run path.
+If you want, I can fix this directly by implementing a true execution contract:
+
+carry drive_id + item_id through CSV/proposal,
+execute moves by IDs (not ambiguous paths),
+add missing setup files (.env.example, proper .streamlit/, backend deps),
+and update docs into one real end-to-end run path. yes please
+
+
+Worked for 8m 47s
+Implemented — the full ID-based execution contract is now wired end-to-end.
+
+What I changed
+Propagated stable source IDs
+
+Added drive_id to crawler output.
+Ensured exports include drive_id + item_id (+ drive_item_path).
+Organizer assignments now carry drive_id + item_id throughout proposal and migration CSVs.
+Switched execution to ID-first moves
+
+Migration now resolves/moves files using drive_id + item_id (not ambiguous path-only lookup).
+Supports multiple document libraries by handling target folders per (drive_id, proposed_path).
+Kept legacy path fallback so older assignment files still work.
+Closed setup/environment gaps
+
+Added missing .env.example.
+Added proper .streamlit/config.toml (existing typo-path file remains untouched for safety).
+Added missing backend deps to requirements.txt: flask, flask-cors.
+Updated flow/documentation
+
+Rewrote README into a real end-to-end runbook: CLI phases, dashboard path, optional API path, and output contract.
+Fixed stale dashboard review-page text (“Scan & Analyze” reference).
+Small hardening
+
+Normalized root full_path construction in crawler to avoid double-slash path artifacts.
+Phase 2 extraction now uses per-document drive_id directly from crawl results.
+Verification run
+python3 -m compileall main.py dashboard.py src pages passed.
+Git/PR
+Branch: cursor/e2e-execution-contract-2feb
+Commit: d879107
+Draft PR created (against main): #1
+If you want, next I can add a small contract validator command (e.g., python main.py --validate-output) that checks required assignment columns/fields before execution and gives actionable errors.
+
+
+11 Files Changed
+.env.example
++13
+config.toml
++17
+README.md
++112
+-86
+main.py
++1
+-12
+2_Review_Moves.py
++1
+-1
+requirements.txt
++4
+crawler.py

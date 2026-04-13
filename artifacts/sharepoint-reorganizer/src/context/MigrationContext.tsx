@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import type { Proposal } from "@/api/client";
+import type { Proposal, ProposalAssignment } from "@/api/client";
 
 export interface MsalUser {
   name: string;
@@ -7,13 +7,18 @@ export interface MsalUser {
   tenantId: string;
 }
 
+export function assignmentKey(a: Pick<ProposalAssignment, "drive_id" | "item_id" | "current_path" | "file_name">): string {
+  if (a.drive_id && a.item_id) return `${a.drive_id}:${a.item_id}`;
+  return `${a.current_path}||${a.file_name}`;
+}
+
 interface MigrationState {
   proposal: Proposal | null;
   setProposal: (p: Proposal | null) => void;
   activePlan: "clean_slate" | "incremental";
   setActivePlan: (plan: "clean_slate" | "incremental") => void;
-  approvedMoves: Record<string, string>;
-  setApprovedMoves: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  approvedMoves: Record<string, ProposalAssignment>;
+  setApprovedMoves: React.Dispatch<React.SetStateAction<Record<string, ProposalAssignment>>>;
   clearApprovals: () => void;
   accessToken: string | null;
   setAccessToken: (token: string | null) => void;
@@ -34,9 +39,9 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
     localStorage.getItem("sp-site-url") || ""
   );
 
-  const [approvedMoves, setApprovedMoves] = useState<Record<string, string>>(() => {
+  const [approvedMoves, setApprovedMoves] = useState<Record<string, ProposalAssignment>>(() => {
     try {
-      const saved = localStorage.getItem("sp-approved-moves");
+      const saved = localStorage.getItem("sp-approved-moves-v2");
       return saved ? JSON.parse(saved) : {};
     } catch {
       return {};
@@ -44,7 +49,7 @@ export function MigrationProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    localStorage.setItem("sp-approved-moves", JSON.stringify(approvedMoves));
+    localStorage.setItem("sp-approved-moves-v2", JSON.stringify(approvedMoves));
   }, [approvedMoves]);
 
   useEffect(() => {

@@ -7,6 +7,9 @@ export interface ProposalAssignment {
   proposed_path: string;
   reason?: string;
   confidence?: number;
+  drive_id?: string;
+  item_id?: string;
+  drive_item_path?: string;
 }
 
 export interface ProposalPlan {
@@ -168,7 +171,7 @@ export async function runOrganize(file: File, auth?: AuthContext): Promise<Propo
 }
 
 export function executeMovesStream(
-  assignments: { file_name: string; proposed_path: string }[],
+  assignments: Pick<ProposalAssignment, "file_name" | "proposed_path" | "drive_id" | "item_id" | "drive_item_path">[],
   autoCreate: boolean,
   onUpdate: (event: any) => void,
   auth?: AuthContext
