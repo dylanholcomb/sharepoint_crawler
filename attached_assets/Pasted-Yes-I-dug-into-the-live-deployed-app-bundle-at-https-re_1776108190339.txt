@@ -1,0 +1,59 @@
+Yes — I dug into the live deployed app bundle at https://replit-migration.replit.app and found a concrete issue in your popup callback flow.
+
+What I found
+From the deployed JS:
+
+MSAL config is:
+clientId: a16dee1e-dafd-4334-8e4f-95212e9389b6
+authority: https://login.microsoftonline.com/4b443fe5-100a-489e-b6bb-b6685b55cd96
+redirectUri: window.location.origin + "/auth/redirect"
+Login button uses loginPopup(...).
+Route "/auth/redirect" renders a component that only shows:
+"Completing sign in..." spinner
+and does not explicitly handle completion/close/navigation.
+Global handleRedirectPromise() is wrapped with .catch(() => {}) (error swallowed).
+Why popup appears to spin forever
+If redirect handling fails/times out (common popup issue), the error is swallowed and the callback page has no fallback behavior, so the popup just sits on the spinner.
+
+Fix (recommended)
+1) Make /auth/redirect an active callback page
+In your redirect component, explicitly process redirect and close popup:
+
+
+function AuthRedirect() {
+  const { instance } = useMsal();
+  const [, navigate] = useLocation();
+ 
+  useEffect(() => {
+    instance
+      .handleRedirectPromise()
+      .then((result) => {
+        if (result?.account) instance.setActiveAccount(result.account);
+      })
+      .catch((err) => {
+        console.error("MSAL redirect error:", err);
+      })
+      .finally(() => {
+        // If this is popup flow, close popup after processing
+        if (window.opener) {
+          window.close();
+        } else {
+          navigate("/", { replace: true });
+        }
+      });
+  }, [instance, navigate]);
+ 
+  return <div>Completing sign in...</div>;
+}
+2) Stop swallowing redirect errors silently
+Where you currently do handleRedirectPromise().catch(() => {}), at least log it.
+
+3) Confirm Azure redirect URIs
+In App Registration → Authentication (SPA), ensure both exist exactly:
+
+https://replit-migration.replit.app/
+https://replit-migration.replit.app/auth/redirect
+4) (Optional hardening) use root redirect for popup
+Popup flows are often more reliable with redirectUri: window.location.origin (or a very lightweight callback page).
+
+If you want, I can give you a drop-in patch for your actual React source files (once you share them), including the exact component/provider edits.

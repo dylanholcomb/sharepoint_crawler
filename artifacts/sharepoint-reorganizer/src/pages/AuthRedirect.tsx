@@ -1,4 +1,31 @@
+import { useEffect } from "react";
+import { useLocation } from "wouter";
+import { useMsal } from "@azure/msal-react";
+
 export default function AuthRedirect() {
+  const { instance } = useMsal();
+  const [, navigate] = useLocation();
+
+  useEffect(() => {
+    instance
+      .handleRedirectPromise()
+      .then((result) => {
+        if (result?.account) {
+          instance.setActiveAccount(result.account);
+        }
+      })
+      .catch((err) => {
+        console.error("MSAL redirect error:", err);
+      })
+      .finally(() => {
+        if (window.opener) {
+          window.close();
+        } else {
+          navigate("/", { replace: true });
+        }
+      });
+  }, [instance, navigate]);
+
   return (
     <div style={{
       display: "flex",
