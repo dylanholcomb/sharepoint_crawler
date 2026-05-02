@@ -31,35 +31,5 @@
     <div class="spinner"></div>
     <p>Completing sign in...</p>
   </div>
-
-  <script src="https://unpkg.com/@azure/msal-browser@5.6.3/dist/msal-browser.min.js"></script>
-  <script>
-    const msalInstance = new msal.PublicClientApplication({
-      auth: {
-        clientId: "a16dee1e-dafd-4334-8e4f-95212e9389b6",
-        authority: "https://login.microsoftonline.com/4b443fe5-100a-489e-b6bb-b6685b55cd96",
-        redirectUri: window.location.origin + "/auth/popup.html",
-      },
-      cache: { cacheLocation: "localStorage" },
-    });
-
-    msalInstance.initialize()
-      .then(function () {
-        return msalInstance.handleRedirectPromise();
-      })
-      .then(function (result) {
-        if (result && result.account) {
-          msalInstance.setActiveAccount(result.account);
-        }
-      })
-      .catch(function (err) {
-        console.error("[popup.html] MSAL error:", err);
-      })
-      .finally(function () {
-        if (window.opener) {
-          window.close();
-        }
-      });
-  </script>
 </body>
 </html>
