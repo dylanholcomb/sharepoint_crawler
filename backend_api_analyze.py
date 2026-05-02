@@ -41,9 +41,10 @@ ENRICHED_CSV_FIELDS = [
     "library_name", "folder_path", "full_path", "depth",
     "created_date", "modified_date", "created_by", "modified_by",
     "web_url", "item_id", "drive_item_path",
-    # AI enrichment fields written by DocumentClassifier:
-    "ai_category", "ai_subcategory", "ai_client_or_entity",
-    "ai_suggested_folder", "ai_keywords", "ai_summary", "ai_confidence",
+    # AI enrichment fields written by DocumentClassifier.classify_batch():
+    "ai_category", "ai_subcategory", "ai_summary", "ai_keywords",
+    "ai_confidence", "ai_suggested_folder", "ai_client_or_entity",
+    "ai_sensitivity_flag",
 ]
 
 
