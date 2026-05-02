@@ -42,9 +42,11 @@ export default function Home() {
   const isSignedIn = accounts.length > 0 || signInStatus === "done";
   const isConnected = connStatus === "done";
 
+  const isInIframe = typeof window !== "undefined" && window.top !== window.self;
+
   // After redirect-flow login completes, acquire the Graph token and populate user
   useEffect(() => {
-    if (accounts.length === 0 || accessToken) return;
+    if (accounts.length === 0 || accessToken || isInIframe) return;
     const account = accounts[0];
     setSignInStatus("loading");
     instance
@@ -59,24 +61,24 @@ export default function Home() {
         setSignInStatus("done");
       })
       .catch((err) => {
-        if (err instanceof InteractionRequiredAuthError) {
-          instance.acquireTokenRedirect({ scopes: GRAPH_SCOPES, account });
-        } else {
-          console.error("[Token acquire error]", err);
-          setSignInStatus("error");
-        }
+        console.error("[Token acquire error]", err);
+        setSignInStatus("error");
       });
-  }, [accounts.length, accessToken, instance, setAccessToken, setMsalUser]);
+  }, [accounts.length, accessToken, isInIframe, instance, setAccessToken, setMsalUser]);
 
   const handleSignIn = async () => {
+    if (isInIframe) {
+      // MSAL refuses to redirect inside an iframe (Replit dev preview).
+      // Pop the app out into a top-level tab and let the user re-click sign-in there.
+      window.open(window.location.href, "_blank", "noopener");
+      return;
+    }
     setSignInStatus("loading");
     try {
-      // Single redirect with all scopes — works in iframes, popups blocked, etc.
       await instance.loginRedirect({
         scopes: [...LOGIN_SCOPES, ...GRAPH_SCOPES],
         redirectUri: window.location.origin + "/auth/redirect",
       });
-      // Page navigates away here; code below won't run
     } catch (err: any) {
       console.error("[Login error]", err);
       setSignInStatus("error");
