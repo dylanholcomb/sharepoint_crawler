@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { motion } from "framer-motion";
 import {
@@ -42,54 +42,49 @@ export default function Home() {
   const isSignedIn = accounts.length > 0 || signInStatus === "done";
   const isConnected = connStatus === "done";
 
+  // After redirect-flow login completes, acquire the Graph token and populate user
+  useEffect(() => {
+    if (accounts.length === 0 || accessToken) return;
+    const account = accounts[0];
+    setSignInStatus("loading");
+    instance
+      .acquireTokenSilent({ scopes: GRAPH_SCOPES, account })
+      .then((tokenResult) => {
+        setAccessToken(tokenResult.accessToken);
+        setMsalUser({
+          name: account.name || account.username,
+          email: account.username,
+          tenantId: account.tenantId,
+        });
+        setSignInStatus("done");
+      })
+      .catch((err) => {
+        if (err instanceof InteractionRequiredAuthError) {
+          instance.acquireTokenRedirect({ scopes: GRAPH_SCOPES, account });
+        } else {
+          console.error("[Token acquire error]", err);
+          setSignInStatus("error");
+        }
+      });
+  }, [accounts.length, accessToken, instance, setAccessToken, setMsalUser]);
+
   const handleSignIn = async () => {
     setSignInStatus("loading");
     try {
-      // Step 1: popup with minimal scopes — less consent friction
-      const loginResult = await instance.loginPopup({
-        scopes: LOGIN_SCOPES,
-        redirectUri: window.location.origin + "/auth/popup.html",
+      // Single redirect with all scopes — works in iframes, popups blocked, etc.
+      await instance.loginRedirect({
+        scopes: [...LOGIN_SCOPES, ...GRAPH_SCOPES],
+        redirectUri: window.location.origin + "/auth/redirect",
       });
-
-      // Step 2: silently acquire Graph/SharePoint tokens now that session exists
-      let tokenResult;
-      try {
-        tokenResult = await instance.acquireTokenSilent({
-          scopes: GRAPH_SCOPES,
-          account: loginResult.account,
-        });
-      } catch (silentErr) {
-        if (silentErr instanceof InteractionRequiredAuthError) {
-          tokenResult = await instance.acquireTokenPopup({
-            scopes: GRAPH_SCOPES,
-            account: loginResult.account,
-            redirectUri: window.location.origin + "/auth/popup.html",
-          });
-        } else {
-          throw silentErr;
-        }
-      }
-
-      const user: MsalUser = {
-        name: loginResult.account.name || loginResult.account.username,
-        email: loginResult.account.username,
-        tenantId: loginResult.account.tenantId,
-      };
-      setMsalUser(user);
-      setAccessToken(tokenResult.accessToken);
-      setSignInStatus("done");
+      // Page navigates away here; code below won't run
     } catch (err: any) {
-      if (err.errorCode !== "user_cancelled") {
-        console.error("[Login error]", err);
-        setSignInStatus("error");
-      } else {
-        setSignInStatus("idle");
-      }
+      console.error("[Login error]", err);
+      setSignInStatus("error");
     }
   };
 
   const handleSignOut = () => {
-    instance.logoutPopup();
+    instance.logoutRedirect();
     setAccessToken(null);
     setMsalUser(null);
     setSignInStatus("idle");
