@@ -1,0 +1,27 @@
+2026-03-16 21:05:27,135: TypeError: FastAPI.__call__() missing 1 required positional argument: 'send'
+2026-05-02 22:09:46,744: Error running WSGI application
+2026-05-02 22:09:46,749: NameError: name 'register_analyze_route' is not defined
+2026-05-02 22:09:46,749:   File "/var/www/dylanholcomb_pythonanywhere_com_wsgi.py", line 8, in <module>
+2026-05-02 22:09:46,749:     from src.api import app as application
+2026-05-02 22:09:46,749: 
+2026-05-02 22:09:46,749:   File "/home/dylanholcomb/sharepoint_crawler/src/api.py", line 279, in <module>
+2026-05-02 22:09:46,749:     register_analyze_route(app, check_api_key, _get_azure_credentials, _build_auth_client)
+2026-05-02 22:09:46,750:     ^^^^^^^^^^^^^^^^^^^^^^
+2026-05-02 22:09:46,750: ***************************************************
+2026-05-02 22:09:46,750: If you're seeing an import error and don't know why,
+2026-05-02 22:09:46,750: we have a dedicated help page to help you debug: 
+2026-05-02 22:09:46,750: https://help.pythonanywhere.com/pages/DebuggingImportError/
+2026-05-02 22:09:46,750: ***************************************************
+2026-05-02 22:10:08,797: Error running WSGI application
+2026-05-02 22:10:08,802: NameError: name 'register_analyze_route' is not defined
+2026-05-02 22:10:08,802:   File "/var/www/dylanholcomb_pythonanywhere_com_wsgi.py", line 8, in <module>
+2026-05-02 22:10:08,802:     from src.api import app as application
+2026-05-02 22:10:08,802: 
+2026-05-02 22:10:08,802:   File "/home/dylanholcomb/sharepoint_crawler/src/api.py", line 279, in <module>
+2026-05-02 22:10:08,802:     register_analyze_route(app, check_api_key, _get_azure_credentials, _build_auth_client)
+2026-05-02 22:10:08,803:     ^^^^^^^^^^^^^^^^^^^^^^
+2026-05-02 22:10:08,803: ***************************************************
+2026-05-02 22:10:08,803: If you're seeing an import error and don't know why,
+2026-05-02 22:10:08,803: we have a dedicated help page to help you debug: 
+2026-05-02 22:10:08,803: https://help.pythonanywhere.com/pages/DebuggingImportError/
+2026-05-02 22:10:08,803: ***************************************************
