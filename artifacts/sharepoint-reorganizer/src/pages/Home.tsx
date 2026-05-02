@@ -8,7 +8,10 @@ import {
 import { useMsal } from "@azure/msal-react";
 import { LOGIN_SCOPES, GRAPH_SCOPES } from "@/lib/msalConfig";
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
-import { testConnection, runOrganize, analyzeStream } from "@/api/client";
+import {
+  testConnection, runOrganize, analyzeStream,
+  streamAnalysisJob, getStoredJobId, clearStoredJobId,
+} from "@/api/client";
 import type { AnalyzeEvent } from "@/api/client";
 import { useMigration } from "@/context/MigrationContext";
 import type { MsalUser } from "@/context/MigrationContext";
@@ -106,31 +109,52 @@ export default function Home() {
     }
   };
 
+  const handleAnalyzeEvent = (event: AnalyzeEvent) => {
+    if (event.message) {
+      setAnalyzeLog((prev) => [...prev, event.message]);
+    }
+    if (event.progress != null) {
+      setAnalyzeProgress(event.progress);
+    }
+    if (event.phase === "complete" && event.proposal) {
+      setProposal(event.proposal);
+      setIsAnalyzing(false);
+      setLocation("/overview");
+    }
+    if (event.phase === "error") {
+      setAnalyzeError(event.message || "Analysis failed.");
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleAnalyze = () => {
     setIsAnalyzing(true);
     setAnalyzeError("");
     setAnalyzeLog([]);
     setAnalyzeProgress(null);
     const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
+    analyzeStream(handleAnalyzeEvent, auth);
+  };
 
-    analyzeStream((event: AnalyzeEvent) => {
-      if (event.message) {
-        setAnalyzeLog((prev) => [...prev, event.message]);
-      }
-      if (event.progress != null) {
-        setAnalyzeProgress(event.progress);
-      }
-      if (event.phase === "complete" && event.proposal) {
-        setProposal(event.proposal);
-        setIsAnalyzing(false);
-        setLocation("/overview");
-      }
-      if (event.phase === "error") {
-        setAnalyzeError(event.message || "Analysis failed.");
-        setIsAnalyzing(false);
+  // Resume an in-flight analysis job if one is recorded in localStorage
+  // (e.g. user refreshed the page or reopened the tab while a job was running).
+  useEffect(() => {
+    const storedJobId = getStoredJobId();
+    if (!storedJobId || isAnalyzing) return;
+    setIsAnalyzing(true);
+    setAnalyzeError("");
+    setAnalyzeLog(["Resuming previous analysis..."]);
+    setAnalyzeProgress(null);
+    const auth = accessToken ? { token: accessToken, siteUrl } : undefined;
+    const cancel = streamAnalysisJob(storedJobId, (event) => {
+      handleAnalyzeEvent(event);
+      if (event.phase === "error" && /not found/i.test(event.message || "")) {
+        clearStoredJobId();
       }
     }, auth);
-  };
+    return cancel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

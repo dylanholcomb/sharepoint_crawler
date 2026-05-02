@@ -85,71 +85,183 @@ export interface AnalyzeEvent {
   proposal?: Proposal;
 }
 
-export function analyzeStream(
+const ANALYZE_JOB_KEY = "sp_reorg_analyze_job_id";
+
+export function getStoredJobId(): string | null {
+  try {
+    return localStorage.getItem(ANALYZE_JOB_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearStoredJobId(): void {
+  try {
+    localStorage.removeItem(ANALYZE_JOB_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function setStoredJobId(jobId: string): void {
+  try {
+    localStorage.setItem(ANALYZE_JOB_KEY, jobId);
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function startAnalysis(auth?: AuthContext): Promise<string> {
+  const res = await fetch(`${BASE}/api/analyze`, {
+    method: "POST",
+    headers: getHeaders(auth),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Failed to start analysis (HTTP ${res.status})`);
+  }
+  const data = await res.json();
+  if (!data.job_id) {
+    throw new Error("Server did not return a job_id");
+  }
+  setStoredJobId(data.job_id);
+  return data.job_id as string;
+}
+
+/**
+ * Stream events for an existing analysis job. Auto-reconnects on transient
+ * connection drops (e.g. PythonAnywhere's 5-min request limit) using the
+ * `since` query param to resume from the last received event id.
+ *
+ * Stops when the job reaches `complete` or `error`.
+ */
+export function streamAnalysisJob(
+  jobId: string,
   onEvent: (event: AnalyzeEvent) => void,
   auth?: AuthContext
 ): () => void {
   const abortController = new AbortController();
+  let lastEventId = -1;
+  let stopped = false;
+  let terminal = false;
+  let reconnectAttempts = 0;
+  const MAX_RECONNECTS = 10;
 
-  (async () => {
-    try {
-      const res = await fetch(`${BASE}/api/analyze`, {
-        method: "POST",
-        headers: getHeaders(auth),
-        signal: abortController.signal,
-      });
+  const consumeStream = async () => {
+    const url = `${BASE}/api/analyze/${jobId}/stream?since=${lastEventId}`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: getHeaders(auth),
+      signal: abortController.signal,
+    });
 
-      if (!res.ok) {
-        const text = await res.text();
-        onEvent({ phase: "error", message: `Failed to analyze SharePoint: ${text}` });
+    if (!res.ok) {
+      if (res.status === 404) {
+        clearStoredJobId();
+        onEvent({ phase: "error", message: "Job not found on server (it may have expired)." });
+        terminal = true;
         return;
       }
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `Stream failed (HTTP ${res.status})`);
+    }
 
-      // If the backend returns plain JSON (non-streaming), handle it gracefully
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("text/event-stream")) {
-        const data = await res.json();
-        onEvent({ phase: "complete", message: "Analysis complete.", proposal: data });
-        return;
-      }
+    if (!res.body) {
+      throw new Error("No response body from server.");
+    }
 
-      if (!res.body) {
-        onEvent({ phase: "error", message: "No response body from server." });
-        return;
-      }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              onEvent(JSON.parse(line.slice(6)));
-            } catch {
-              // ignore malformed chunks
-            }
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const ev = JSON.parse(line.slice(6)) as AnalyzeEvent & { id?: number };
+          if (typeof ev.id === "number") {
+            lastEventId = ev.id;
           }
+          onEvent(ev);
+          if (ev.phase === "complete" || ev.phase === "error") {
+            terminal = true;
+            clearStoredJobId();
+          }
+        } catch {
+          /* ignore malformed chunks */
         }
       }
-    } catch (err: any) {
-      if (err.name === "AbortError") {
-        onEvent({ phase: "error", message: "Analysis cancelled." });
-      } else {
-        onEvent({ phase: "error", message: err.message || "Stream failed." });
+    }
+  };
+
+  (async () => {
+    while (!stopped && !terminal) {
+      try {
+        await consumeStream();
+        if (terminal || stopped) return;
+        // Stream closed cleanly without a terminal event — likely a proxy
+        // timeout. Reconnect with the resume cursor.
+        reconnectAttempts = 0;
+      } catch (err: any) {
+        if (err.name === "AbortError" || stopped) {
+          return;
+        }
+        reconnectAttempts++;
+        if (reconnectAttempts > MAX_RECONNECTS) {
+          onEvent({
+            phase: "error",
+            message: `Lost connection to server after ${MAX_RECONNECTS} reconnect attempts. ${err.message || ""}`.trim(),
+          });
+          return;
+        }
+        // Exponential backoff: 1s, 2s, 4s, capped at 8s
+        const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 8000);
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   })();
 
-  return () => abortController.abort();
+  return () => {
+    stopped = true;
+    abortController.abort();
+  };
+}
+
+/**
+ * Convenience wrapper: starts a job and immediately streams its progress.
+ * This preserves the original `analyzeStream` API used by Home.tsx.
+ */
+export function analyzeStream(
+  onEvent: (event: AnalyzeEvent) => void,
+  auth?: AuthContext
+): () => void {
+  let cancelStream: (() => void) | null = null;
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const jobId = await startAnalysis(auth);
+      if (cancelled) return;
+      cancelStream = streamAnalysisJob(jobId, onEvent, auth);
+    } catch (err: any) {
+      onEvent({
+        phase: "error",
+        message: err.message || "Failed to start analysis.",
+      });
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+    if (cancelStream) cancelStream();
+  };
 }
 
 export async function runOrganize(file: File, auth?: AuthContext): Promise<Proposal> {
